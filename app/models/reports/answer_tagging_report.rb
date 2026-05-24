@@ -16,8 +16,8 @@ module Reports
   #       }
   #     },
   #     user_tagging_report: {
-  #       "<username>" => { user_id:, name:, full_name:, percentage:,
-  #                         cnt_tagged:, cnt_not_tagged:, cnt_taggable: }
+  #       <user_id> => { user_id:, name:, full_name:, percentage:,
+  #                      cnt_tagged:, cnt_not_tagged:, cnt_taggable: }
   #     }
   #   }
   class AnswerTaggingReport
@@ -33,128 +33,178 @@ module Reports
       per_deployment = {}
       # The coordinator runs one DeploymentPipeline per TagPromptDeployment,
       # then passes the results to UserSummaryPipeline for cross-deployment totals.
-      #
-      #   DeploymentPipeline (< BaseReport) — streams TeamsUser grouped by user_id:
-      #     precomputes answer_ids_by_team (one SQL query) and tags_by_user (one
-      #     SQL query), then accumulates per-user tagged / not-tagged / interval
-      #     stats with no DB queries inside the hot loop.
       TagPromptDeployment
         .where(assignment_id: @reportable.id)
         .includes(:tag_prompt, :questionnaire)
         .each do |deployment|
           per_deployment[deployment.id] = DeploymentPipeline.new(@reportable, deployment).run
         end
-      #   UserSummaryPipeline — aggregates DeploymentPipeline output across
-      #     all deployments into a single per-user total. No additional DB queries.
       user_summary = UserSummaryPipeline.new(per_deployment).run
       {
         questionnaire_tagging_report: per_deployment,
-        user_tagging_report: user_summary
+        user_tagging_report:          user_summary
       }
     end
 
     # -------------------------------------------------------------------------
-    # Pipeline 1 — per-user tagging stats for one TagPromptDeployment.
-    # Streams TeamsUser (one row per assignment member) grouped by user_id.
-    # All DB-heavy work (answer IDs, tags) is precomputed before the hot loop.
+    # Coordinator — runs two streaming pipelines for one TagPromptDeployment
+    # and merges their results:
+    #
+    #   TaggableAnswersPipeline — streams taggable Answer rows (joined with
+    #     response_maps, filtered by item type and threshold). Returns per-user
+    #     lists of taggable answer_ids and their response_ids.
+    #     Output: { user_id => { answer_ids: [], response_ids: Set[] } }
+    #
+    #   TaggingStatsPipeline — streams all AnswerTag rows for this deployment
+    #     (joined with answers to get response_id). No item/threshold filtering
+    #     in SQL — filtering happens in finalize by comparing response_ids.
+    #     Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
+    #
+    # Precomputed once, shared across both pipelines:
+    #   @item_ids      — IDs of items in the deployment's questionnaire (tiny)
+    #   @users_by_team — TeamsUser records grouped by team_id; also used in
+    #                    finalize to build per-user name info
     # -------------------------------------------------------------------------
-    class DeploymentPipeline < BaseReport
+    class DeploymentPipeline
       def initialize(reportable, deployment)
-        super(reportable)
-        @deployment = deployment
-        @tags_by_user = AnswerTag.for_deployment(deployment.id).group_by(&:user_id)
-        @taggable_answer_ids_by_team = fetch_taggable_answer_ids_associated_with_deployment
+        @reportable    = reportable
+        @deployment    = deployment
+        @item_ids      = Item.for_questionnaire_and_type(deployment.questionnaire_id, deployment.question_type).pluck(:id)
+        @users_by_team = TeamsUser.for_assignment(deployment.assignment_id).includes(:user).group_by(&:team_id)
       end
 
-      def source
-        # For looping through users present in teams of the assignment.
-        TeamsUser.for_assignment(@reportable.id).includes(:user)
-      end
-
-      def grouper = ->(team_membership) { team_membership.user_id }
-
-      def initial_state = {}
-
-      # Will be called for each row in the source stream (i.e., per each team user)
-      def accumulate(state, user_id, team_membership)
-        answer_ids = @taggable_answer_ids_by_team[team_membership.team_id] || []
-
-        # Assuming that a user is only a member of one team. Check with prof??
-        cnt_taggable = answer_ids.size
-        return if cnt_taggable.zero?
-
-        user_tags = (@tags_by_user[user_id] || []).select { |tag| answer_ids.include?(tag.answer_id) }
-        cnt_tagged = user_tags.size
-        cnt_not_tagged = cnt_taggable - cnt_tagged
-
-        tag_times_in_order = user_tags.map(&:updated_at).sort
-        # fetches 2 consecutive timestamps and computes the difference
-        intervals_between_tags = tag_times_in_order.each_cons(2).map do |earlier, later|
-          later - earlier
-        end
-
-        state[user_id] = {
-          user_id: user_id,
-          name: team_membership.user.name,
-          full_name: team_membership.user.full_name,
-          percentage: format('%.1f', cnt_tagged.to_f / cnt_taggable * 100),
-          cnt_tagged: cnt_tagged,
-          cnt_not_tagged: cnt_not_tagged,
-          cnt_taggable: cnt_taggable,
-          tag_update_intervals: intervals_between_tags
-        }
-      end
-
-      def finalize(state)
-        {
-          questionnaire_name: @deployment.questionnaire.name,
-          prompt: @deployment.tag_prompt.prompt,
-          question_type: @deployment.question_type,
-          answer_length_threshold: @deployment.answer_length_threshold,
-          user_stats: state.values
-        }
+      def run
+        taggable_data = TaggableAnswersPipeline.new(@reportable, @deployment, @item_ids, @users_by_team).run
+        tagging_stats = TaggingStatsPipeline.new(@reportable, @deployment).run
+        finalize(taggable_data, tagging_stats)
       end
 
       private
 
-      # One SQL query that returns taggable answer IDs keyed by team_id.
-      # No DB calls in the hot loop.
-      def fetch_taggable_answer_ids_associated_with_deployment
-        item_ids = fetch_item_ids_associated_with_deployment_questionnaire
-        return {} if item_ids.empty?
+      def finalize(taggable_data, tagging_stats)
+        user_info = @users_by_team.values.flatten.each_with_object({}) do |teams_user, info|
+          info[teams_user.user_id] = { name: teams_user.user.name, full_name: teams_user.user.full_name }
+        end
 
-        response_ids_by_team = fetch_responses_received_by_teams_across_questionnaires_for_deployment_assignment
+        user_stats = user_info.map do |user_id, info|
+          taggable              = taggable_data.fetch(user_id, {})
+          cnt_taggable          = (taggable[:answer_ids] || []).size
+          taggable_response_ids = taggable[:response_ids] || Set.new
 
-        # Transforms { team_id => [response_ids] } into { team_id => [answer_ids] }
-        response_ids_by_team.transform_values do |response_ids|
-          scope = Answer.for_items_and_responses(item_ids, response_ids)
-          scope = scope.where('LENGTH(comments) > ?', @deployment.answer_length_threshold) if @deployment.answer_length_threshold
-          scope.pluck(:id)
+          # Filter tags to only those belonging to taggable responses for this user.
+          # TODO: confirm with prof — if a reviewer submits multiple responses for the
+          # same round, only the latest submitted response should be counted as taggable.
+          # TaggableAnswersPipeline may need to deduplicate response_ids by keeping only
+          # the most recently submitted response per (reviewer, round).
+          matching_tags = tagging_stats.fetch(user_id, []).select { |tag| taggable_response_ids.include?(tag[:response_id]) }
+          cnt_tagged     = matching_tags.size
+          cnt_not_tagged = cnt_taggable - cnt_tagged
+
+          tag_times_in_order     = matching_tags.map { |tag| tag[:updated_at] }.sort
+          intervals_between_tags = tag_times_in_order.each_cons(2).map { |earlier, later| later - earlier }
+
+          {
+            user_id:              user_id,
+            name:                 info[:name],
+            full_name:            info[:full_name],
+            percentage:           cnt_taggable.zero? ? '0.0' : format('%.1f', cnt_tagged.to_f / cnt_taggable * 100),
+            cnt_tagged:           cnt_tagged,
+            cnt_not_tagged:       cnt_not_tagged,
+            cnt_taggable:         cnt_taggable,
+            tag_update_intervals: intervals_between_tags
+          }
+        end
+
+        {
+          questionnaire_name:      @deployment.questionnaire.name,
+          prompt:                  @deployment.tag_prompt.prompt,
+          question_type:           @deployment.question_type,
+          answer_length_threshold: @deployment.answer_length_threshold,
+          user_stats:              user_stats
+        }
+      end
+
+      # -----------------------------------------------------------------------
+      # Pipeline 1 — per-user taggable answer and response IDs.
+      #
+      # Streams taggable Answer rows (joined with responses and response_maps,
+      # filtered by item type and length threshold). Each row is one (answer, team)
+      # pair — answers.id is unique per row so find_each paginates correctly.
+      # For each row, adds the answer_id and response_id to all users of the team.
+      #
+      # Output: { user_id => { answer_ids: [], response_ids: Set[] } }
+      # -----------------------------------------------------------------------
+      class TaggableAnswersPipeline < BaseReport
+        def initialize(reportable, deployment, item_ids, users_by_team)
+          super(reportable)
+          @deployment    = deployment
+          @item_ids      = item_ids
+          @users_by_team = users_by_team
+        end
+
+        def source
+          return Answer.none if @item_ids.empty?
+
+          Answer
+            .taggable_for_assignment(
+              @deployment.assignment_id, @item_ids,
+              type:      'ReviewResponseMap',
+              threshold: @deployment.answer_length_threshold
+            )
+            .select('answers.id, answers.response_id, response_maps.reviewee_id as team_id')
+        end
+
+        def grouper = ->(answer) { answer.team_id }
+
+        def initial_state
+          Hash.new { |state, user_id| state[user_id] = { answer_ids: [], response_ids: Set.new } }
+        end
+
+        def accumulate(state, team_id, answer)
+          (@users_by_team[team_id] || []).each do |teams_user|
+            state[teams_user.user_id][:answer_ids] << answer.id
+            state[teams_user.user_id][:response_ids].add(answer.response_id)
+          end
         end
       end
 
-      def fetch_item_ids_associated_with_deployment_questionnaire
-        Item.for_questionnaire_and_type(@deployment.questionnaire_id, @deployment.question_type).pluck(:id)
-      end
-
-      # Returns { team_id => [response_id, ...] } across all rubrics
-      # on this assignment. Scoping to the deployment's questionnaire happens
-      # via item_ids in fetch_taggable_answer_ids_by_team, not here.
-      def fetch_responses_received_by_teams_across_questionnaires_for_deployment_assignment
-        team_response_pairs = Response
-          .submitted_review_responses_for(@reportable.id)
-          .pluck('response_maps.reviewee_id', 'responses.id')
-
-        response_ids_by_team = Hash.new { |by_team, team_id| by_team[team_id] = [] }
-        team_response_pairs.each do |team_id, response_id|
-          response_ids_by_team[team_id] << response_id
+      # -----------------------------------------------------------------------
+      # Pipeline 2 — per-user answer tags with response context.
+      #
+      # Streams all AnswerTag rows for this deployment (joined with answers to
+      # get response_id). No item or threshold filtering in SQL — the finalize
+      # step filters tags by comparing their response_id against the taggable
+      # response_ids from Pipeline 1.
+      #
+      # Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
+      # -----------------------------------------------------------------------
+      class TaggingStatsPipeline < BaseReport
+        def initialize(reportable, deployment)
+          super(reportable)
+          @deployment = deployment
         end
-        response_ids_by_team
+
+        def source
+          AnswerTag
+            .for_deployment(@deployment.id)
+            .joins(:answer)
+            .select('answer_tags.id, answer_tags.user_id, answer_tags.answer_id, answer_tags.updated_at, answers.response_id')
+        end
+
+        def grouper = ->(tag) { tag.user_id }
+
+        def initial_state
+          Hash.new { |state, user_id| state[user_id] = [] }
+        end
+
+        def accumulate(state, user_id, tag)
+          state[user_id] << { answer_id: tag.answer_id, response_id: tag.response_id, updated_at: tag.updated_at }
+        end
       end
     end
 
     # -------------------------------------------------------------------------
-    # Pipeline 2 — cross-deployment per-user summary.
+    # Pipeline 3 — cross-deployment per-user summary.
     # Consumes DeploymentPipeline output; no additional DB queries.
     # -------------------------------------------------------------------------
     class UserSummaryPipeline
@@ -166,12 +216,12 @@ module Reports
         summary = {}
         @per_deployment.each_value do |deployment_data|
           deployment_data[:user_stats].each do |stat|
-            key = stat[:name]
+            key = stat[:user_id]
             if summary.key?(key)
               entry = summary[key]
-              entry[:cnt_tagged] += stat[:cnt_tagged]
+              entry[:cnt_tagged]     += stat[:cnt_tagged]
               entry[:cnt_not_tagged] += stat[:cnt_not_tagged]
-              entry[:cnt_taggable] += stat[:cnt_taggable]
+              entry[:cnt_taggable]   += stat[:cnt_taggable]
               entry[:percentage] = entry[:cnt_taggable].zero? ? '-' : format('%.1f', entry[:cnt_tagged].to_f / entry[:cnt_taggable] * 100)
             else
               summary[key] = stat.slice(:user_id, :name, :full_name, :cnt_tagged, :cnt_not_tagged, :cnt_taggable, :percentage)
