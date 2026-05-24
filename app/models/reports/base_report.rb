@@ -18,8 +18,23 @@ module Reports
   # Subclasses must implement (private):
   #   source        → AR relation (consumed via find_each)
   #   grouper       → lambda(row) → grouping key
+  #                   Separates "what bucket does this row belong to?" from
+  #                   "what do I do with a row in that bucket?" (accumulate).
+  #                   BaseReport#run calls grouper.call(row) and passes the
+  #                   result as the key to accumulate — subclasses get this
+  #                   wiring for free and can see at a glance what each
+  #                   pipeline is aggregating over. Examples:
+  #                     ScoresPipeline       groups by reviewer_id  — all responses
+  #                       from the same reviewer go into the same bucket
+  #                     AvgRangesPipeline    groups by reviewee_id  — all responses
+  #                       received by the same team go into the same bucket
+  #                     TaggableAnswersPipeline groups by team_id   — all answers
+  #                       received by the same team go into the same bucket
   #   initial_state → empty accumulator value
-  #   accumulate(state, key, row)  → mutates state in place
+  #   accumulate(state, key, row)  → mutates state in place; key is the result
+  #                   of grouper.call(row). Answers "what do I do with a row
+  #                   in this bucket?" — all domain math lives here, not in
+  #                   the base class.
   #
   # Subclasses may override (private):
   #   finalize(state) → transforms finished state into the output hash
