@@ -42,8 +42,8 @@ module Reports
         .where(assignment_id: @reportable.id)
         .includes(:tag_prompt, :questionnaire)
         .each do |deployment|
-        per_deployment[deployment.id] = DeploymentPipeline.new(@reportable, deployment).run
-      end
+          per_deployment[deployment.id] = DeploymentPipeline.new(@reportable, deployment).run
+        end
       #   UserSummaryPipeline — aggregates DeploymentPipeline output across
       #     all deployments into a single per-user total. No additional DB queries.
       user_summary = UserSummaryPipeline.new(per_deployment).run
@@ -83,7 +83,6 @@ module Reports
         cnt_taggable = answer_ids.size
         return if cnt_taggable.zero?
 
-        # This will take care of the last response submitted in each round case
         user_tags = (@tags_by_user[user_id] || []).select { |tag| answer_ids.include?(tag.answer_id) }
         cnt_tagged = user_tags.size
         cnt_not_tagged = cnt_taggable - cnt_tagged
@@ -135,10 +134,7 @@ module Reports
       end
 
       def fetch_item_ids_associated_with_deployment_questionnaire
-        Item
-          .where(questionnaire_id: @deployment.questionnaire_id,
-                 question_type: @deployment.question_type)
-          .pluck(:id)
+        Item.for_questionnaire_and_type(@deployment.questionnaire_id, @deployment.question_type).pluck(:id)
       end
 
       # Returns { team_id => [response_id, ...] } across all rubrics
@@ -146,12 +142,8 @@ module Reports
       # via item_ids in fetch_taggable_answer_ids_by_team, not here.
       def fetch_responses_received_by_teams_across_questionnaires_for_deployment_assignment
         team_response_pairs = Response
-                                .joins(:response_map)
-                                .where(
-                                  response_maps: { reviewed_object_id: @reportable.id, type: 'ReviewResponseMap' },
-                                  is_submitted: true
-                                )
-                                .pluck('response_maps.reviewee_id', 'responses.id')
+          .submitted_review_responses_for(@reportable.id)
+          .pluck('response_maps.reviewee_id', 'responses.id')
 
         response_ids_by_team = Hash.new { |by_team, team_id| by_team[team_id] = [] }
         team_response_pairs.each do |team_id, response_id|

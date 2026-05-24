@@ -5,6 +5,13 @@ class Response < ApplicationRecord
   include MetricHelper
 
   belongs_to :response_map, class_name: 'ResponseMap', foreign_key: 'map_id', inverse_of: false
+
+  scope :submitted_review_responses_for, ->(assignment_id) {
+    joins(:response_map).where(
+      response_maps: { reviewed_object_id: assignment_id, type: 'ReviewResponseMap' },
+      is_submitted: true
+    )
+  }
   has_many :scores, class_name: 'Answer', foreign_key: 'response_id', dependent: :destroy, inverse_of: false
 
   alias map response_map
@@ -26,7 +33,7 @@ class Response < ApplicationRecord
     existing_responses.each do |response|
       unless id == response.id # the current_response is also in existing_responses array
         count += 1
-        total +=  response.aggregate_questionnaire_score.to_f / response.maximum_score
+        total += response.aggregate_questionnaire_score.to_f / response.maximum_score
       end
     end
 
@@ -56,7 +63,7 @@ class Response < ApplicationRecord
     sum = 0
     scores.each do |s|
       # For quiz responses, the weights will be 1 or 0, depending on if correct
-      sum += s.answer * s.item.weight unless s.answer.nil?  #|| !s.item.scorable?
+      sum += s.answer * s.item.weight unless s.answer.nil? #|| !s.item.scorable?
     end
     # puts "sum: #{sum}"
     sum
