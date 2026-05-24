@@ -40,8 +40,7 @@ module Reports
       def precompute_max_q_scores
         # Check with prof if we need to use score_views??
         AssignmentQuestionnaire
-          .joins(:questionnaire)
-          .where(assignment_id: @reportable.id, questionnaires: { questionnaire_type: 'ReviewQuestionnaire' })
+          .for_assignment_and_type(@reportable.id, 'ReviewQuestionnaire')
           .pluck(:used_in_round, 'questionnaires.max_question_score')
           .to_h
       end
@@ -53,9 +52,7 @@ module Reports
     # -----------------------------------------------------------------------
     class ReviewersPipeline < BaseReport
       def source
-        ReviewResponseMap
-          .where(reviewed_object_id: @reportable.id)
-          .includes(reviewer: :user)
+        ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
 
       # It pre-computes the grouping key once and passes it to accumulate so the subclass doesn't have to recompute it.
