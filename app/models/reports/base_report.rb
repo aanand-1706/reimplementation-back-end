@@ -25,10 +25,32 @@ module Reports
   #   finalize(state) → transforms finished state into the output hash
   #                      (default: returns state unchanged)
   class BaseReport
-    def initialize(assignment)
-      @assignment = assignment
+    # Factory method for assignment-scoped reports.
+    def self.for_assignment(assignment)
+      new(assignment)
     end
 
+    # Factory method for course-scoped reports.
+    def self.for_course(course)
+      new(course)
+    end
+
+    # @param reportable [Assignment, Course] the object the report is scoped to.
+    # Subclasses reference @reportable instead of a type-specific variable so
+    # the same pipeline works for any reportable entity.
+    def initialize(reportable)
+      @reportable = reportable
+    end
+
+    # Runs the pipeline: stream → group → accumulate → finalize.
+    #
+    # Benefits of this structure over writing report code directly:
+    #   1. Memory safety — find_each streams in batches of 500 rather than
+    #      loading the entire relation into Ruby. Every report gets this for free.
+    #   2. New reports are just data — subclasses define source/grouper/accumulate/
+    #      finalize; the pipeline wiring is not their concern.
+    #   3. Single place for cross-cutting concerns — logging, timing, or error
+    #      handling can be added here once and applies to every report.
     def run
       state = initial_state
       source.find_each(batch_size: 500) do |row|
