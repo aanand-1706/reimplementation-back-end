@@ -8,8 +8,8 @@ module Reports
   #
   # Each pipeline streams its own source relation via find_each, so no
   # full result set is ever materialised in Ruby at once.
-  # max_question_score is precomputed once per (assignment, round) to avoid
-  # an N+1 query inside the hot accumulate loop.
+  # max_question_score is precomputed once in #run and passed to both score
+  # pipelines to avoid a duplicate DB query and N+1 inside the accumulate loop.
   class ReviewReport
     def self.for_assignment(assignment)
       new(assignment)
@@ -20,29 +20,25 @@ module Reports
     end
 
     def run
+      # Precomputed once and passed to both score pipelines to avoid a duplicate DB query.
+      max_q_scores = AssignmentQuestionnaire
+        .for_assignment_and_type(@reportable.id, 'ReviewQuestionnaire')
+        .pluck(:used_in_round, 'questionnaires.max_question_score')
+        .to_h
       {
-        reviewers: ReviewersPipeline.new(@reportable).run,
-        review_scores: ScoresPipeline.new(@reportable).run,
-        avg_and_ranges: AvgRangesPipeline.new(@reportable).run
+        reviewers:      ReviewersPipeline.new(@reportable).run,
+        review_scores:  ScoresPipeline.new(@reportable, max_q_scores).run,
+        avg_and_ranges: AvgRangesPipeline.new(@reportable, max_q_scores).run
       }
     end
 
-    # Shared source and max-score precomputation for ScoresPipeline and AvgRangesPipeline.
-    # Both pipelines stream the same submitted ReviewResponseMap responses and need
-    # the same max question score lookup — extracted here to avoid duplication.
+    # Shared source for ScoresPipeline and AvgRangesPipeline.
+    # Both pipelines stream the same submitted ReviewResponseMap responses.
     module ReviewResponsePipelineShared
       def source
         Response
           .submitted_review_responses_for(@reportable.id)
           .includes(:response_map, scores: :item)
-      end
-
-      def precompute_max_q_scores
-        # Check with prof if we need to use score_views??
-        AssignmentQuestionnaire
-          .for_assignment_and_type(@reportable.id, 'ReviewQuestionnaire')
-          .pluck(:used_in_round, 'questionnaires.max_question_score')
-          .to_h
       end
     end
 
@@ -55,7 +51,6 @@ module Reports
         ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
 
-      # It pre-computes the grouping key once and passes it to accumulate so the subclass doesn't have to recompute it.
       def grouper = ->(response_map) { response_map.reviewer_id }
 
       def initial_state = {}
@@ -64,7 +59,7 @@ module Reports
         return if state.key?(reviewer_id)
 
         reviewer = response_map.reviewer
-        return unless r
+        return unless reviewer
 
         state[reviewer_id] = {
           id: reviewer.id,
@@ -88,9 +83,9 @@ module Reports
     class ScoresPipeline < BaseReport
       include ReviewResponsePipelineShared
 
-      def initialize(reportable)
-        super
-        @max_q_score = precompute_max_q_scores
+      def initialize(reportable, max_q_scores)
+        super(reportable)
+        @max_q_score = max_q_scores
       end
 
       def grouper = ->(response) { response.response_map.reviewer_id }
@@ -130,9 +125,9 @@ module Reports
     class AvgRangesPipeline < BaseReport
       include ReviewResponsePipelineShared
 
-      def initialize(reportable)
-        super
-        @max_q_score = precompute_max_q_scores
+      def initialize(reportable, max_q_scores)
+        super(reportable)
+        @max_q_score = max_q_scores
       end
 
       def grouper = ->(response) { response.response_map.reviewee_id }
