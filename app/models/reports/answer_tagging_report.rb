@@ -52,8 +52,8 @@ module Reports
     #
     #   TaggableAnswersPipeline — streams taggable Answer rows (joined with
     #     response_maps, filtered by item type and threshold). Returns per-user
-    #     lists of taggable answer_ids and their response_ids.
-    #     Output: { user_id => { answer_ids: [], response_ids: Set[] } }
+    #     lists of taggable answer_ids.
+    #     Output: { user_id => [answer_ids] }
     #
     #   TaggingStatsPipeline — streams all AnswerTag rows for this deployment
     #     (joined with answers to get response_id). No item/threshold filtering
@@ -87,16 +87,15 @@ module Reports
         end
 
         user_stats = user_info.map do |user_id, info|
-          taggable              = taggable_data.fetch(user_id, {})
-          cnt_taggable          = (taggable[:answer_ids] || []).size
-          taggable_response_ids = taggable[:response_ids] || Set.new
+          taggable_answer_ids = taggable_data.fetch(user_id, []).to_set
+          cnt_taggable        = taggable_answer_ids.size
 
-          # Filter tags to only those belonging to taggable responses for this user.
+          # Filter tags to only those on answers that are taggable for this user.
           # TODO: confirm with prof — if a reviewer submits multiple responses for the
           # same round, only the latest submitted response should be counted as taggable.
-          # TaggableAnswersPipeline may need to deduplicate response_ids by keeping only
-          # the most recently submitted response per (reviewer, round).
-          matching_tags = tagging_stats.fetch(user_id, []).select { |tag| taggable_response_ids.include?(tag[:response_id]) }
+          # TaggableAnswersPipeline may need to deduplicate by keeping only the most
+          # recently submitted response per (reviewer, round).
+          matching_tags = tagging_stats.fetch(user_id, []).select { |tag| taggable_answer_ids.include?(tag[:answer_id]) }
           cnt_tagged     = matching_tags.size
           cnt_not_tagged = cnt_taggable - cnt_tagged
 
@@ -125,14 +124,14 @@ module Reports
       end
 
       # -----------------------------------------------------------------------
-      # Pipeline 1 — per-user taggable answer and response IDs.
+      # Pipeline 1 — per-user taggable answer IDs.
       #
       # Streams taggable Answer rows (joined with responses and response_maps,
       # filtered by item type and length threshold). Each row is one (answer, team)
       # pair — answers.id is unique per row so find_each paginates correctly.
-      # For each row, adds the answer_id and response_id to all users of the team.
+      # For each row, adds the answer_id to all users of the team.
       #
-      # Output: { user_id => { answer_ids: [], response_ids: Set[] } }
+      # Output: { user_id => [answer_ids] }
       # -----------------------------------------------------------------------
       class TaggableAnswersPipeline < BaseReport
         def initialize(reportable, deployment, item_ids, users_by_team)
@@ -151,19 +150,18 @@ module Reports
               type:      'ReviewResponseMap',
               threshold: @deployment.answer_length_threshold
             )
-            .select('answers.id, answers.response_id, response_maps.reviewee_id as team_id')
+            .select('answers.id, response_maps.reviewee_id as team_id')
         end
 
         def grouper = ->(answer) { answer.team_id }
 
         def initial_state
-          Hash.new { |state, user_id| state[user_id] = { answer_ids: [], response_ids: Set.new } }
+          Hash.new { |state, user_id| state[user_id] = [] }
         end
 
         def accumulate(state, team_id, answer)
           (@users_by_team[team_id] || []).each do |teams_user|
-            state[teams_user.user_id][:answer_ids] << answer.id
-            state[teams_user.user_id][:response_ids].add(answer.response_id)
+            state[teams_user.user_id] << answer.id
           end
         end
       end
