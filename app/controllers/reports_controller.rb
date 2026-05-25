@@ -6,6 +6,7 @@ class ReportsController < ApplicationController
     'feedback_response_map'         => Reports::FeedbackReport,
     'teammate_review_response_map'  => Reports::TeammateReviewReport,
     'bookmark_rating_response_map'  => Reports::BookmarkRatingReport,
+    'answer_tagging'                => Reports::AnswerTaggingReport,
     'basic'                         => Reports::BasicReport
   }.freeze
 
@@ -28,7 +29,7 @@ class ReportsController < ApplicationController
     end
 
     assignment = Assignment.find(assignment_id)
-    data = report_class.new(assignment).run
+    data = report_class.for_assignment(assignment).run
     render json: { type: type, assignment_id: assignment_id.to_i }.merge(data)
   rescue ActiveRecord::RecordNotFound
     render json: { error: 'Assignment not found' }, status: :not_found
