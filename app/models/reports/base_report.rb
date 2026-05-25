@@ -34,7 +34,10 @@ module Reports
   #   accumulate(state, key, row)  → mutates state in place; key is the result
   #                   of state_key_for.call(row). Answers "what do I do with a row
   #                   in this bucket?" — all domain math lives here, not in
-  #                   the base class.
+  #                   the base class. Note: BaseReport passes the key but does not
+  #                   enforce that accumulate uses it — subclasses are trusted to
+  #                   use it as the state bucket key; using a different key silently
+  #                   breaks the grouping contract.
   #
   # Subclasses may override (private):
   #   finalize(state) → transforms finished state into the output hash
