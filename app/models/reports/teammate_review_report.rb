@@ -4,23 +4,23 @@ module Reports
   # Teammate-review report: for each reviewer, shows how many teammates they
   # have in total, how many they reviewed, and the individual reviewee details.
   #
-  # Coordinator runs two aggregators into a single shared state:
+  # Coordinator runs two reducers into a single shared state:
   #
-  #   TeammateReviewAggregator — streams TeammateReviewResponseMap rows.
+  #   TeammateReviewReducer — streams TeammateReviewResponseMap rows.
   #     For each row, initializes the reviewer entry if absent and appends
   #     the reviewee to the reviewees list.
-  #     Writes to state: { reviewer_id => { ..., reviewed_count:, reviewees: [] } }
+  #     Writes to state: { user_id => { ..., reviewed_count:, reviewees: [] } }
   #
-  #   TeamSizeAggregator — streams TeamsUser rows for the assignment.
+  #   TeamSizeReducer — streams TeamsUser rows for the assignment.
   #     For each row, sets teammate_count for that user if they appear in state
   #     (i.e. they are a reviewer). No extra loop needed — writes directly into
   #     the same shared state.
-  #     Writes to state: { reviewer_id => { ..., teammate_count: } }
+  #     Writes to state: { user_id => { ..., teammate_count: } }
   #
   # Shared state shape (all keys present from initialization, keyed by user_id):
-  #   { user_id => { reviewer_id:, user_id:, name:, full_name:,      ← filled by TeammateReviewAggregator
-  #                      teammate_count:,                             ← filled by TeamSizeAggregator
-  #                      reviewed_count:,                             ← filled by TeammateReviewAggregator
+  #   { user_id => { reviewer_id:, user_id:, name:, full_name:,      ← filled by TeammateReviewReducer
+  #                      teammate_count:,                             ← filled by TeamSizeReducer
+  #                      reviewed_count:,                             ← filled by TeammateReviewReducer
   #                      reviewees: [{ reviewee_id:, name:, full_name: }] } }
   class TeammateReviewReport
     def self.for_assignment(assignment)
@@ -43,16 +43,16 @@ module Reports
           reviewees:      []
         }
       end
-      TeammateReviewAggregator.new(@reportable).run(shared_state)
-      TeamSizeAggregator.new(@reportable).run(shared_state)
+      TeammateReviewReducer.new(@reportable).run(shared_state)
+      TeamSizeReducer.new(@reportable).run(shared_state)
       { reviewers: shared_state.values }
     end
 
     # -----------------------------------------------------------------------
-    # Aggregator 1 — per-reviewer reviewee details and reviewed count.
+    # Reducer 1 — per-reviewer reviewee details and reviewed count.
     # Streams TeammateReviewResponseMap rows grouped by reviewer_id.
     # -----------------------------------------------------------------------
-    class TeammateReviewAggregator < BaseReport
+    class TeammateReviewReducer < BaseReport
       def source
         TeammateReviewResponseMap
           .where(reviewed_object_id: @reportable.id)
@@ -87,11 +87,11 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Aggregator 2 — per-reviewer teammate count.
+    # Reducer 2 — per-reviewer teammate count.
     # Streams TeamsUser rows for the assignment. Only updates state for
     # users who are already reviewers (present in shared state).
     # -----------------------------------------------------------------------
-    class TeamSizeAggregator < BaseReport
+    class TeamSizeReducer < BaseReport
       def source
         TeamsUser.for_assignment(@reportable.id).includes(:user)
       end

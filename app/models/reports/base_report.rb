@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Reports
-  # Template for a streaming reduce-based report reducer.
+  # Template for a streaming reduce-based report.
   #
   # Design rationale (addresses two anti-patterns from the naive approach):
   #
@@ -26,8 +26,8 @@ module Reports
   #                   reducer is aggregating over. Examples:
   #                     ScoresReducer          groups by reviewer_id — all responses
   #                       from the same reviewer go into the same bucket
-  #                     AvgRangesReducer       groups by reviewee_id — all responses
-  #                       received by the same team go into the same bucket
+  #                     AvgRangesReducer       groups by team_id — all review mappings
+  #                       for the same team go into the same bucket
   #                     TaggableAnswersReducer groups by team_id     — all answers
   #                       received by the same team go into the same bucket
   #   initial_state → empty accumulator value
@@ -65,7 +65,7 @@ module Reports
     # Accepts an optional shared_state so that multiple reducers can write
     # into the same hash without a merge loop. When shared_state is provided,
     # initial_state is ignored — the coordinator owns state initialization.
-    # finalize is always called
+    # finalize is always called, even when shared_state is provided.
     #
     # Benefits of this structure over writing report code directly:
     #   1. Memory safety — find_each streams in batches of 500 rather than
