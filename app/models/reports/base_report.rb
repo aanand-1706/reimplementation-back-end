@@ -62,6 +62,11 @@ module Reports
 
     # Runs the aggregator: stream → group → accumulate → finalize.
     #
+    # Accepts an optional shared_state so that multiple aggregators can write
+    # into the same hash without a merge loop. When shared_state is provided,
+    # initial_state is ignored and finalize is skipped — the coordinator owns
+    # the state lifecycle. When omitted, behaves as a standalone aggregator.
+    #
     # Benefits of this structure over writing report code directly:
     #   1. Memory safety — find_each streams in batches of 500 rather than
     #      loading the entire relation into Ruby. Every report gets this for free.
@@ -69,12 +74,12 @@ module Reports
     #      finalize; the aggregator wiring is not their concern.
     #   3. Single place for cross-cutting concerns — logging, timing, or error
     #      handling can be added here once and applies to every report.
-    def run
-      state = initial_state
+    def run(shared_state = nil)
+      state = shared_state || initial_state
       source.find_each(batch_size: 500) do |row|
         accumulate(state, state_key_for.call(row), row)
       end
-      finalize(state)
+      shared_state ? state : finalize(state)
     end
 
     private
