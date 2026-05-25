@@ -1,15 +1,19 @@
 # frozen_string_literal: true
 
 module Reports
-  # Peer-review report composed of three independent streaming aggregators:
-  # 1 ReviewersAggregator  — distinct reviewers with user details
-  # 2 ScoresAggregator     — per-reviewer × round × reviewee score pct
-  # 3 AvgRangesAggregator  — per-team × round max / min / avg
+  # Peer-review report composed of three streaming reducers.
   #
-  # Each aggregator streams its own source relation via find_each, so no
-  # full result set is ever materialised in Ruby at once.
-  # max_question_score is precomputed once in #run and passed to both score
-  # aggregators to avoid a duplicate DB query and N+1 inside the accumulate loop.
+  # ReviewersReducer and ScoresReducer share a single state keyed by reviewer_id
+  # so reviewer info and scores are co-located without a merge loop:
+  #   { reviewer_id => { id:, user_id:, name:, full_name:, handle:,
+  #                      scores: { reviewee_id => { round => score_pct } } } }
+  #
+  # AvgRangesReducer runs independently:
+  #   { team_id => avg_score }
+  #
+  # Each reducer streams its source via find_each — no full result set is ever
+  # materialised in Ruby at once. Scores and questionnaires are eagerly loaded
+  # to avoid N+1 inside calculate_total_score and maximum_score (ScorableHelper).
   class ReviewReport
     def self.for_assignment(assignment)
       new(assignment)
@@ -20,33 +24,43 @@ module Reports
     end
 
     def run
-      # Precomputed once and passed to both score aggregators to avoid a duplicate DB query.
-      max_q_scores = AssignmentQuestionnaire
-        .for_assignment_and_type(@reportable.id, 'ReviewQuestionnaire')
-        .pluck(:used_in_round, 'questionnaires.max_question_score')
-        .to_h
+      shared_state = Hash.new do |state, reviewer_id|
+        state[reviewer_id] = {
+          id:        nil,
+          user_id:   nil,
+          name:      nil,
+          full_name: nil,
+          handle:    nil,
+          scores:    Hash.new { |by_reviewee, reviewee_id| by_reviewee[reviewee_id] = {} }
+        }
+      end
+
+      ReviewersReducer.new(@reportable).run(shared_state)
+      ScoresReducer.new(@reportable).run(shared_state)
+
       {
-        reviewers:      ReviewersAggregator.new(@reportable).run,
-        review_scores:  ScoresAggregator.new(@reportable, max_q_scores).run,
-        avg_and_ranges: AvgRangesAggregator.new(@reportable, max_q_scores).run
+        reviewers:      shared_state.values.sort_by { |r| r[:full_name].to_s.downcase },
+        avg_and_ranges: AvgRangesReducer.new(@reportable).run
       }
     end
 
-    # Shared source for ScoresAggregator and AvgRangesAggregator.
-    # Both aggregators stream the same submitted ReviewResponseMap responses.
+    # Shared source for ScoresReducer.
+    # Streams submitted ReviewResponseMap responses with scores and questionnaires
+    # eagerly loaded to avoid N+1 inside calculate_total_score and maximum_score.
     module ReviewResponseShared
       def source
         Response
           .submitted_review_responses_for(@reportable.id)
-          .includes(:response_map, scores: :item)
+          .includes(:response_map, scores: { item: :questionnaire })
       end
     end
 
     # -----------------------------------------------------------------------
-    # Aggregator 1 — distinct reviewers sorted by full name.
-    # Groups by reviewer_id; first occurrence per reviewer is kept.
+    # Reducer 1 — reviewer info.
+    # Streams ReviewResponseMap rows; writes reviewer details into shared state
+    # on first occurrence per reviewer.
     # -----------------------------------------------------------------------
-    class ReviewersAggregator < BaseReport
+    class ReviewersReducer < BaseReport
       def source
         ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
@@ -61,108 +75,58 @@ module Reports
         reviewer = response_map.reviewer
         return unless reviewer
 
-        state[reviewer_id] = {
-          id:        reviewer.id,
-          user_id:   reviewer.user_id,
-          name:      reviewer.user&.name,
-          full_name: reviewer.user&.full_name,
-          handle:    reviewer.handle
-        }
-      end
-
-      def finalize(state)
-        state.values.sort_by { |reviewer| reviewer[:full_name].to_s.downcase }
+        state[reviewer_id][:id]        = reviewer.id
+        state[reviewer_id][:user_id]   = reviewer.user_id
+        state[reviewer_id][:name]      = reviewer.user&.name
+        state[reviewer_id][:full_name] = reviewer.user&.full_name
+        state[reviewer_id][:handle]    = reviewer.handle
       end
     end
 
     # -----------------------------------------------------------------------
-    # Aggregator 2 — per-reviewer × round × reviewee score percentages.
-    # Streams submitted Responses with scores and items eagerly loaded.
-    # Output: { reviewer_id => { round => { reviewee_id => pct } } }
+    # Reducer 2 — per-reviewer × reviewee × round score percentages.
+    # Streams submitted Responses; writes score_pct into shared state under
+    # state[reviewer_id][:scores][reviewee_id][round].
     # -----------------------------------------------------------------------
-    class ScoresAggregator < BaseReport
+    class ScoresReducer < BaseReport
       include ReviewResponseShared
-
-      def initialize(reportable, max_q_scores)
-        super(reportable)
-        @max_q_score = max_q_scores
-      end
 
       def state_key_for = ->(response) { response.response_map.reviewer_id }
 
-      def initial_state
-        # Three-level nested hash: reviewer_id => round => reviewee_id => score_pct
-        # Each level auto-initializes when a missing key is accessed,
-        # so state[reviewer_id][round][reviewee_id] = pct never raises NoMethodError.
-        Hash.new do |by_reviewer, reviewer_id|
-          by_reviewer[reviewer_id] = Hash.new do |by_round, round|
-            by_round[round] = {}
-          end
-        end
-      end
+      def initial_state = {}
 
       def accumulate(state, reviewer_id, response)
-        answered = response.scores.reject { |s| s.answer.nil? }
-        total_wt = answered.sum { |s| s.item.weight }
-        return if total_wt.zero?
+        return if response.maximum_score.zero?
 
-        round       = response.round || 1
         reviewee_id = response.response_map.reviewee_id
-        raw_score   = answered.sum { |s| s.answer * s.item.weight }
-        max_score   = total_wt * (@max_q_score[round] || @max_q_score[nil] || 1)
-        return unless max_score.positive?
+        round       = response.round || 1
+        score_pct   = (response.calculate_total_score.to_f / response.maximum_score * 100).round(2)
 
-        state[reviewer_id][round][reviewee_id] = ((raw_score.to_f / max_score) * 100).round(2)
+        state[reviewer_id][:scores][reviewee_id][round] = score_pct
       end
     end
 
     # -----------------------------------------------------------------------
-    # Aggregator 3 — per-team × round aggregate (max / min / avg).
-    # Same response stream as Aggregator 2; groups by reviewee_id.
-    # Output: { team_id => { round => { max:, min:, avg: } } }
+    # Reducer 3 — per-team average review score.
+    # Streams AssignmentTeam rows with review_mappings, responses, and scores
+    # eagerly loaded to avoid N+1. Delegates score computation to
+    # aggregate_review_grade (via ReviewAggregator concern) which picks the
+    # latest submitted response per round per map and normalises the score.
+    # Output: { team_id => avg_score }
     # -----------------------------------------------------------------------
-    # Check with prof how they are planning to use this information?? Is it for AVG score column?
-    class AvgRangesAggregator < BaseReport
-      include ReviewResponseShared
-
-      def initialize(reportable, max_q_scores)
-        super(reportable)
-        @max_q_score = max_q_scores
+    class AvgRangesReducer < BaseReport
+      def source
+        AssignmentTeam
+          .where(parent_id: @reportable.id)
+          .includes(review_mappings: { responses: { scores: :item } })
       end
 
-      def state_key_for = ->(response) { response.response_map.reviewee_id }
+      def state_key_for = ->(team) { team.id }
 
-      def initial_state
-        # Two-level nested hash: reviewee_id => round => [score_pcts]
-        # Each level auto-initializes when a missing key is accessed.
-        Hash.new do |by_team, reviewee_id|
-          by_team[reviewee_id] = Hash.new { |by_round, round| by_round[round] = [] }
-        end
-      end
+      def initial_state = {}
 
-      def accumulate(state, reviewee_id, response)
-        answered = response.scores.reject { |s| s.answer.nil? }
-        total_wt = answered.sum { |s| s.item.weight }
-        return if total_wt.zero?
-
-        round     = response.round || 1
-        raw_score = answered.sum { |s| s.answer * s.item.weight }
-        max_score = total_wt * (@max_q_score[round] || @max_q_score[nil] || 1)
-        return unless max_score.positive?
-
-        state[reviewee_id][round] << ((raw_score.to_f / max_score) * 100)
-      end
-
-      def finalize(state)
-        state.transform_values do |rounds|
-          rounds.transform_values do |scores|
-            {
-              max: scores.max.round(2),
-              min: scores.min.round(2),
-              avg: (scores.sum / scores.size).round(2)
-            }
-          end
-        end
+      def accumulate(state, team_id, team)
+        state[team_id] = team.aggregate_review_grade
       end
     end
   end

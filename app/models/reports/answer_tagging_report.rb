@@ -31,15 +31,15 @@ module Reports
 
     def run
       per_deployment = {}
-      # The coordinator runs one DeploymentAggregator per TagPromptDeployment,
-      # then passes the results to UserSummaryAggregator for cross-deployment totals.
+      # The coordinator runs one DeploymentReducer per TagPromptDeployment,
+      # then passes the results to UserSummaryReducer for cross-deployment totals.
       TagPromptDeployment
         .where(assignment_id: @reportable.id)
         .includes(:tag_prompt, :questionnaire)
         .each do |deployment|
-          per_deployment[deployment.id] = DeploymentAggregator.new(@reportable, deployment).run
+          per_deployment[deployment.id] = DeploymentReducer.new(@reportable, deployment).run
         end
-      user_summary = UserSummaryAggregator.new(per_deployment).run
+      user_summary = UserSummaryReducer.new(per_deployment).run
       {
         questionnaire_tagging_report: per_deployment,
         user_tagging_report:          user_summary
@@ -47,25 +47,25 @@ module Reports
     end
 
     # -------------------------------------------------------------------------
-    # Coordinator — runs two streaming aggregators for one TagPromptDeployment
+    # Coordinator — runs two streaming reducers for one TagPromptDeployment
     # and merges their results:
     #
-    #   TaggableAnswersAggregator — streams taggable Answer rows (joined with
+    #   TaggableAnswersReducer — streams taggable Answer rows (joined with
     #     response_maps, filtered by item type and threshold). Returns per-user
     #     lists of taggable answer_ids.
     #     Output: { user_id => [answer_ids] }
     #
-    #   TaggingStatsAggregator — streams all AnswerTag rows for this deployment
+    #   TaggingStatsReducer — streams all AnswerTag rows for this deployment
     #     (joined with answers to get answer_id). No item/threshold filtering
     #     in SQL — filtering happens in finalize by comparing answer_ids.
     #     Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
     #
-    # Precomputed once, shared across both aggregators:
+    # Precomputed once, shared across both reducers:
     #   @item_ids      — IDs of items in the deployment's questionnaire (tiny)
     #   @users_by_team — TeamsUser records grouped by team_id; also used in
     #                    finalize to build per-user name info
     # -------------------------------------------------------------------------
-    class DeploymentAggregator
+    class DeploymentReducer
       def initialize(reportable, deployment)
         @reportable    = reportable
         @deployment    = deployment
@@ -74,8 +74,8 @@ module Reports
       end
 
       def run
-        taggable_data = TaggableAnswersAggregator.new(@reportable, @deployment, @item_ids, @users_by_team).run
-        tagging_stats = TaggingStatsAggregator.new(@reportable, @deployment).run
+        taggable_data = TaggableAnswersReducer.new(@reportable, @deployment, @item_ids, @users_by_team).run
+        tagging_stats = TaggingStatsReducer.new(@reportable, @deployment).run
         finalize(taggable_data, tagging_stats)
       end
 
@@ -93,7 +93,7 @@ module Reports
           # Filter tags to only those on answers that are taggable for this user.
           # TODO: confirm with prof — if a reviewer submits multiple responses for the
           # same round, only the latest submitted response should be counted as taggable.
-          # TaggableAnswersAggregator may need to deduplicate by keeping only the most
+          # TaggableAnswersReducer may need to deduplicate by keeping only the most
           # recently submitted response per (reviewer, round).
           matching_tags  = tagging_stats.fetch(user_id, []).select { |tag| taggable_answer_ids.include?(tag[:answer_id]) }
           cnt_tagged     = matching_tags.size
@@ -124,7 +124,7 @@ module Reports
       end
 
       # -----------------------------------------------------------------------
-      # Aggregator 1 — per-user taggable answer IDs.
+      # Reducer 1 — per-user taggable answer IDs.
       #
       # Streams taggable Answer rows (joined with responses and response_maps,
       # filtered by item type and length threshold). Each row is one (answer, team)
@@ -133,7 +133,7 @@ module Reports
       #
       # Output: { user_id => [answer_ids] }
       # -----------------------------------------------------------------------
-      class TaggableAnswersAggregator < BaseReport
+      class TaggableAnswersReducer < BaseReport
         def initialize(reportable, deployment, item_ids, users_by_team)
           super(reportable)
           @deployment    = deployment
@@ -167,16 +167,16 @@ module Reports
       end
 
       # -----------------------------------------------------------------------
-      # Aggregator 2 — per-user answer tags with answer context.
+      # Reducer 2 — per-user answer tags with answer context.
       #
       # Streams all AnswerTag rows for this deployment (joined with answers).
       # No item or threshold filtering in SQL — the finalize step filters tags
       # by comparing their answer_id against the taggable answer_ids from
-      # Aggregator 1.
+      # Reducer 1.
       #
       # Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
       # -----------------------------------------------------------------------
-      class TaggingStatsAggregator < BaseReport
+      class TaggingStatsReducer < BaseReport
         def initialize(reportable, deployment)
           super(reportable)
           @deployment = deployment
@@ -202,10 +202,10 @@ module Reports
     end
 
     # -------------------------------------------------------------------------
-    # Aggregator 3 — cross-deployment per-user summary.
-    # Consumes DeploymentAggregator output; no additional DB queries.
+    # Reducer 3 — cross-deployment per-user summary.
+    # Consumes DeploymentReducer output; no additional DB queries.
     # -------------------------------------------------------------------------
-    class UserSummaryAggregator
+    class UserSummaryReducer
       def initialize(per_deployment_result)
         @per_deployment = per_deployment_result
       end

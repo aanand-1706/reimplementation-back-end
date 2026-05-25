@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Reports
-  # Template for a streaming reduce-based report aggregator.
+  # Template for a streaming reduce-based report reducer.
   #
   # Design rationale (addresses two anti-patterns from the naive approach):
   #
@@ -12,7 +12,7 @@ module Reports
   #
   #   Anti-pattern 2 — "default metrics in base": encoding avg_score or any
   #   domain metric in the base class ties every report to one shape of math.
-  #   This class contains *only* the aggregator scaffold; each subclass owns its
+  #   This class contains *only* the reducer scaffold; each subclass owns its
   #   accumulate/finalize logic entirely.
   #
   # Subclasses must implement (private):
@@ -23,12 +23,12 @@ module Reports
   #                   BaseReport#run calls state_key_for.call(row) and passes the
   #                   result as the key to accumulate — subclasses get this
   #                   wiring for free and can see at a glance what each
-  #                   aggregator is aggregating over. Examples:
-  #                     ScoresAggregator          groups by reviewer_id — all responses
+  #                   reducer is aggregating over. Examples:
+  #                     ScoresReducer          groups by reviewer_id — all responses
   #                       from the same reviewer go into the same bucket
-  #                     AvgRangesAggregator       groups by reviewee_id — all responses
+  #                     AvgRangesReducer       groups by reviewee_id — all responses
   #                       received by the same team go into the same bucket
-  #                     TaggableAnswersAggregator groups by team_id     — all answers
+  #                     TaggableAnswersReducer groups by team_id     — all answers
   #                       received by the same team go into the same bucket
   #   initial_state → empty accumulator value
   #   accumulate(state, key, row)  → mutates state in place; key is the result
@@ -55,23 +55,23 @@ module Reports
 
     # @param reportable [Assignment, Course] the object the report is scoped to.
     # Subclasses reference @reportable instead of a type-specific variable so
-    # the same aggregator works for any reportable entity.
+    # the same reducer works for any reportable entity.
     def initialize(reportable)
       @reportable = reportable
     end
 
-    # Runs the aggregator: stream → group → accumulate → finalize.
+    # Runs the reducer: stream → group → accumulate → finalize.
     #
-    # Accepts an optional shared_state so that multiple aggregators can write
+    # Accepts an optional shared_state so that multiple reducers can write
     # into the same hash without a merge loop. When shared_state is provided,
-    # initial_state is ignored and finalize is skipped — the coordinator owns
-    # the state lifecycle. When omitted, behaves as a standalone aggregator.
+    # initial_state is ignored — the coordinator owns state initialization.
+    # finalize is always called
     #
     # Benefits of this structure over writing report code directly:
     #   1. Memory safety — find_each streams in batches of 500 rather than
     #      loading the entire relation into Ruby. Every report gets this for free.
     #   2. New reports are just data — subclasses define source/state_key_for/accumulate/
-    #      finalize; the aggregator wiring is not their concern.
+    #      finalize; the reducer wiring is not their concern.
     #   3. Single place for cross-cutting concerns — logging, timing, or error
     #      handling can be added here once and applies to every report.
     def run(shared_state = nil)
@@ -79,7 +79,7 @@ module Reports
       source.find_each(batch_size: 500) do |row|
         accumulate(state, state_key_for.call(row), row)
       end
-      shared_state ? state : finalize(state)
+      finalize(state)
     end
 
     private
