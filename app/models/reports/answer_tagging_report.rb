@@ -31,15 +31,15 @@ module Reports
 
     def run
       per_deployment = {}
-      # The coordinator runs one DeploymentPipeline per TagPromptDeployment,
-      # then passes the results to UserSummaryPipeline for cross-deployment totals.
+      # The coordinator runs one DeploymentAggregator per TagPromptDeployment,
+      # then passes the results to UserSummaryAggregator for cross-deployment totals.
       TagPromptDeployment
         .where(assignment_id: @reportable.id)
         .includes(:tag_prompt, :questionnaire)
         .each do |deployment|
-          per_deployment[deployment.id] = DeploymentPipeline.new(@reportable, deployment).run
+          per_deployment[deployment.id] = DeploymentAggregator.new(@reportable, deployment).run
         end
-      user_summary = UserSummaryPipeline.new(per_deployment).run
+      user_summary = UserSummaryAggregator.new(per_deployment).run
       {
         questionnaire_tagging_report: per_deployment,
         user_tagging_report:          user_summary
@@ -47,25 +47,25 @@ module Reports
     end
 
     # -------------------------------------------------------------------------
-    # Coordinator — runs two streaming pipelines for one TagPromptDeployment
+    # Coordinator — runs two streaming aggregators for one TagPromptDeployment
     # and merges their results:
     #
-    #   TaggableAnswersPipeline — streams taggable Answer rows (joined with
+    #   TaggableAnswersAggregator — streams taggable Answer rows (joined with
     #     response_maps, filtered by item type and threshold). Returns per-user
     #     lists of taggable answer_ids.
     #     Output: { user_id => [answer_ids] }
     #
-    #   TaggingStatsPipeline — streams all AnswerTag rows for this deployment
-    #     (joined with answers to get response_id). No item/threshold filtering
-    #     in SQL — filtering happens in finalize by comparing response_ids.
+    #   TaggingStatsAggregator — streams all AnswerTag rows for this deployment
+    #     (joined with answers to get answer_id). No item/threshold filtering
+    #     in SQL — filtering happens in finalize by comparing answer_ids.
     #     Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
     #
-    # Precomputed once, shared across both pipelines:
+    # Precomputed once, shared across both aggregators:
     #   @item_ids      — IDs of items in the deployment's questionnaire (tiny)
     #   @users_by_team — TeamsUser records grouped by team_id; also used in
     #                    finalize to build per-user name info
     # -------------------------------------------------------------------------
-    class DeploymentPipeline
+    class DeploymentAggregator
       def initialize(reportable, deployment)
         @reportable    = reportable
         @deployment    = deployment
@@ -74,8 +74,8 @@ module Reports
       end
 
       def run
-        taggable_data = TaggableAnswersPipeline.new(@reportable, @deployment, @item_ids, @users_by_team).run
-        tagging_stats = TaggingStatsPipeline.new(@reportable, @deployment).run
+        taggable_data = TaggableAnswersAggregator.new(@reportable, @deployment, @item_ids, @users_by_team).run
+        tagging_stats = TaggingStatsAggregator.new(@reportable, @deployment).run
         finalize(taggable_data, tagging_stats)
       end
 
@@ -93,9 +93,9 @@ module Reports
           # Filter tags to only those on answers that are taggable for this user.
           # TODO: confirm with prof — if a reviewer submits multiple responses for the
           # same round, only the latest submitted response should be counted as taggable.
-          # TaggableAnswersPipeline may need to deduplicate by keeping only the most
+          # TaggableAnswersAggregator may need to deduplicate by keeping only the most
           # recently submitted response per (reviewer, round).
-          matching_tags = tagging_stats.fetch(user_id, []).select { |tag| taggable_answer_ids.include?(tag[:answer_id]) }
+          matching_tags  = tagging_stats.fetch(user_id, []).select { |tag| taggable_answer_ids.include?(tag[:answer_id]) }
           cnt_tagged     = matching_tags.size
           cnt_not_tagged = cnt_taggable - cnt_tagged
 
@@ -124,7 +124,7 @@ module Reports
       end
 
       # -----------------------------------------------------------------------
-      # Pipeline 1 — per-user taggable answer IDs.
+      # Aggregator 1 — per-user taggable answer IDs.
       #
       # Streams taggable Answer rows (joined with responses and response_maps,
       # filtered by item type and length threshold). Each row is one (answer, team)
@@ -133,7 +133,7 @@ module Reports
       #
       # Output: { user_id => [answer_ids] }
       # -----------------------------------------------------------------------
-      class TaggableAnswersPipeline < BaseReport
+      class TaggableAnswersAggregator < BaseReport
         def initialize(reportable, deployment, item_ids, users_by_team)
           super(reportable)
           @deployment    = deployment
@@ -153,7 +153,7 @@ module Reports
             .select('answers.id, response_maps.reviewee_id as team_id')
         end
 
-        def grouper = ->(answer) { answer.team_id }
+        def state_key_for = ->(answer) { answer.team_id }
 
         def initial_state
           Hash.new { |state, user_id| state[user_id] = [] }
@@ -167,16 +167,16 @@ module Reports
       end
 
       # -----------------------------------------------------------------------
-      # Pipeline 2 — per-user answer tags with response context.
+      # Aggregator 2 — per-user answer tags with answer context.
       #
-      # Streams all AnswerTag rows for this deployment (joined with answers to
-      # get response_id). No item or threshold filtering in SQL — the finalize
-      # step filters tags by comparing their response_id against the taggable
-      # response_ids from Pipeline 1.
+      # Streams all AnswerTag rows for this deployment (joined with answers).
+      # No item or threshold filtering in SQL — the finalize step filters tags
+      # by comparing their answer_id against the taggable answer_ids from
+      # Aggregator 1.
       #
       # Output: { user_id => [{ answer_id:, response_id:, updated_at: }] }
       # -----------------------------------------------------------------------
-      class TaggingStatsPipeline < BaseReport
+      class TaggingStatsAggregator < BaseReport
         def initialize(reportable, deployment)
           super(reportable)
           @deployment = deployment
@@ -189,7 +189,7 @@ module Reports
             .select('answer_tags.id, answer_tags.user_id, answer_tags.answer_id, answer_tags.updated_at, answers.response_id')
         end
 
-        def grouper = ->(tag) { tag.user_id }
+        def state_key_for = ->(tag) { tag.user_id }
 
         def initial_state
           Hash.new { |state, user_id| state[user_id] = [] }
@@ -202,10 +202,10 @@ module Reports
     end
 
     # -------------------------------------------------------------------------
-    # Pipeline 3 — cross-deployment per-user summary.
-    # Consumes DeploymentPipeline output; no additional DB queries.
+    # Aggregator 3 — cross-deployment per-user summary.
+    # Consumes DeploymentAggregator output; no additional DB queries.
     # -------------------------------------------------------------------------
-    class UserSummaryPipeline
+    class UserSummaryAggregator
       def initialize(per_deployment_result)
         @per_deployment = per_deployment_result
       end

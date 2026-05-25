@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
 module Reports
-  # Peer-review report composed of three independent streaming pipelines:
-  # 1 ReviewersPipeline — distinct reviewers with user details
-  # 2 ScoresPipeline — per-reviewer × round × reviewee score pct
-  # 3 AvgRangesPipeline — per-team × round max / min / avg
+  # Peer-review report composed of three independent streaming aggregators:
+  # 1 ReviewersAggregator  — distinct reviewers with user details
+  # 2 ScoresAggregator     — per-reviewer × round × reviewee score pct
+  # 3 AvgRangesAggregator  — per-team × round max / min / avg
   #
-  # Each pipeline streams its own source relation via find_each, so no
+  # Each aggregator streams its own source relation via find_each, so no
   # full result set is ever materialised in Ruby at once.
   # max_question_score is precomputed once in #run and passed to both score
-  # pipelines to avoid a duplicate DB query and N+1 inside the accumulate loop.
+  # aggregators to avoid a duplicate DB query and N+1 inside the accumulate loop.
   class ReviewReport
     def self.for_assignment(assignment)
       new(assignment)
@@ -20,21 +20,21 @@ module Reports
     end
 
     def run
-      # Precomputed once and passed to both score pipelines to avoid a duplicate DB query.
+      # Precomputed once and passed to both score aggregators to avoid a duplicate DB query.
       max_q_scores = AssignmentQuestionnaire
         .for_assignment_and_type(@reportable.id, 'ReviewQuestionnaire')
         .pluck(:used_in_round, 'questionnaires.max_question_score')
         .to_h
       {
-        reviewers:      ReviewersPipeline.new(@reportable).run,
-        review_scores:  ScoresPipeline.new(@reportable, max_q_scores).run,
-        avg_and_ranges: AvgRangesPipeline.new(@reportable, max_q_scores).run
+        reviewers:      ReviewersAggregator.new(@reportable).run,
+        review_scores:  ScoresAggregator.new(@reportable, max_q_scores).run,
+        avg_and_ranges: AvgRangesAggregator.new(@reportable, max_q_scores).run
       }
     end
 
-    # Shared source for ScoresPipeline and AvgRangesPipeline.
-    # Both pipelines stream the same submitted ReviewResponseMap responses.
-    module ReviewResponsePipelineShared
+    # Shared source for ScoresAggregator and AvgRangesAggregator.
+    # Both aggregators stream the same submitted ReviewResponseMap responses.
+    module ReviewResponseShared
       def source
         Response
           .submitted_review_responses_for(@reportable.id)
@@ -43,15 +43,15 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Pipeline 1 — distinct reviewers sorted by full name.
+    # Aggregator 1 — distinct reviewers sorted by full name.
     # Groups by reviewer_id; first occurrence per reviewer is kept.
     # -----------------------------------------------------------------------
-    class ReviewersPipeline < BaseReport
+    class ReviewersAggregator < BaseReport
       def source
         ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
 
-      def grouper = ->(response_map) { response_map.reviewer_id }
+      def state_key_for = ->(response_map) { response_map.reviewer_id }
 
       def initial_state = {}
 
@@ -62,11 +62,11 @@ module Reports
         return unless reviewer
 
         state[reviewer_id] = {
-          id: reviewer.id,
-          user_id: reviewer.user_id,
-          name: reviewer.user&.name,
+          id:        reviewer.id,
+          user_id:   reviewer.user_id,
+          name:      reviewer.user&.name,
           full_name: reviewer.user&.full_name,
-          handle: reviewer.handle
+          handle:    reviewer.handle
         }
       end
 
@@ -76,19 +76,19 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Pipeline 2 — per-reviewer × round × reviewee score percentages.
+    # Aggregator 2 — per-reviewer × round × reviewee score percentages.
     # Streams submitted Responses with scores and items eagerly loaded.
     # Output: { reviewer_id => { round => { reviewee_id => pct } } }
     # -----------------------------------------------------------------------
-    class ScoresPipeline < BaseReport
-      include ReviewResponsePipelineShared
+    class ScoresAggregator < BaseReport
+      include ReviewResponseShared
 
       def initialize(reportable, max_q_scores)
         super(reportable)
         @max_q_score = max_q_scores
       end
 
-      def grouper = ->(response) { response.response_map.reviewer_id }
+      def state_key_for = ->(response) { response.response_map.reviewer_id }
 
       def initial_state
         # Three-level nested hash: reviewer_id => round => reviewee_id => score_pct
@@ -106,10 +106,10 @@ module Reports
         total_wt = answered.sum { |s| s.item.weight }
         return if total_wt.zero?
 
-        round = response.round || 1
+        round       = response.round || 1
         reviewee_id = response.response_map.reviewee_id
-        raw_score = answered.sum { |s| s.answer * s.item.weight }
-        max_score = total_wt * (@max_q_score[round] || @max_q_score[nil] || 1)
+        raw_score   = answered.sum { |s| s.answer * s.item.weight }
+        max_score   = total_wt * (@max_q_score[round] || @max_q_score[nil] || 1)
         return unless max_score.positive?
 
         state[reviewer_id][round][reviewee_id] = ((raw_score.to_f / max_score) * 100).round(2)
@@ -117,20 +117,20 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Pipeline 3 — per-team × round aggregate (max / min / avg).
-    # Same response stream as Pipeline 2; groups by reviewee_id.
+    # Aggregator 3 — per-team × round aggregate (max / min / avg).
+    # Same response stream as Aggregator 2; groups by reviewee_id.
     # Output: { team_id => { round => { max:, min:, avg: } } }
     # -----------------------------------------------------------------------
     # Check with prof how they are planning to use this information?? Is it for AVG score column?
-    class AvgRangesPipeline < BaseReport
-      include ReviewResponsePipelineShared
+    class AvgRangesAggregator < BaseReport
+      include ReviewResponseShared
 
       def initialize(reportable, max_q_scores)
         super(reportable)
         @max_q_score = max_q_scores
       end
 
-      def grouper = ->(response) { response.response_map.reviewee_id }
+      def state_key_for = ->(response) { response.response_map.reviewee_id }
 
       def initial_state
         # Two-level nested hash: reviewee_id => round => [score_pcts]
@@ -145,7 +145,7 @@ module Reports
         total_wt = answered.sum { |s| s.item.weight }
         return if total_wt.zero?
 
-        round = response.round || 1
+        round     = response.round || 1
         raw_score = answered.sum { |s| s.answer * s.item.weight }
         max_score = total_wt * (@max_q_score[round] || @max_q_score[nil] || 1)
         return unless max_score.positive?
