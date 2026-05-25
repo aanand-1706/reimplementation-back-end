@@ -195,6 +195,12 @@ Rails.application.routes.draw do
           delete :delete_participants
         end
       end      
+      resources :reports, only: [] do
+        collection do
+          post :fetch_response_report
+        end
+      end
+
       resources :grades do
         collection do        
           get '/:assignment_id/view_all_scores', to: 'grades#view_all_scores'

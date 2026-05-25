@@ -15,11 +15,11 @@ class ReportsController < ApplicationController
     current_user_has_ta_privileges?
   end
 
-  # GET/POST /reports/response_report?assignment_id=<id>&type=<type>
+  # POST /reports/fetch_response_report
   # Returns the requested report as JSON.
-  def response_report
-    assignment_id = params[:assignment_id] || params[:id]
-    type = params.dig(:report, :type) || params[:type] || 'basic'
+  def fetch_response_report
+    assignment_id = params[:assignment_id]
+    type = params[:type] || 'basic'
 
     report_class = REPORT_CLASSES[type]
     unless report_class
