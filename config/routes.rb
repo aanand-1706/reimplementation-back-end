@@ -76,8 +76,7 @@ Rails.application.routes.draw do
           delete 'delete_all/questionnaire/:id', to:'questions#delete_all#questionnaire', as: 'delete_all'
         end
       end
-  
-  
+
      resources :review_mappings, only: [] do
           collection do
             post :assign_round_robin
