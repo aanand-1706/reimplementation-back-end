@@ -4,8 +4,6 @@ class TeamsUser < ApplicationRecord
   belongs_to :user
   belongs_to :team
 
-  scope :for_assignment, ->(assignment_id) { joins(:team).where(teams: { parent_id: assignment_id }) }
-
   def name(ip_address = nil)
     name = user.name(ip_address)
   end
