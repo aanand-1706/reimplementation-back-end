@@ -65,11 +65,10 @@ module Reports
         ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
 
-      def state_key_for = ->(response_map) { response_map.reviewer_id }
-
       def initial_state = {}
 
-      def accumulate(state, reviewer_id, response_map)
+      def accumulate(state, response_map)
+        reviewer_id = response_map.reviewer_id
         return if state.key?(reviewer_id)
 
         reviewer = response_map.reviewer
@@ -91,13 +90,12 @@ module Reports
     class ScoresReducer < BaseReport
       include ReviewResponseShared
 
-      def state_key_for = ->(response) { response.response_map.reviewer_id }
-
       def initial_state = {}
 
-      def accumulate(state, reviewer_id, response)
+      def accumulate(state, response)
         return if response.maximum_score.zero?
 
+        reviewer_id = response.response_map.reviewer_id
         reviewee_id = response.response_map.reviewee_id
         round       = response.round || 1
         score_pct   = (response.calculate_total_score.to_f / response.maximum_score * 100).round(2)
@@ -121,12 +119,10 @@ module Reports
           .includes(review_mappings: { responses: { scores: :item } })
       end
 
-      def state_key_for = ->(team) { team.id }
-
       def initial_state = {}
 
-      def accumulate(state, team_id, team)
-        state[team_id] = team.aggregate_review_grade
+      def accumulate(state, team)
+        state[team.id] = team.aggregate_review_grade
       end
     end
   end
