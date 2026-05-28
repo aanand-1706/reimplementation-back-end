@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Reports
-  # Template for a streaming reduce-based report.
+  # Template for a streaming reduction-based report.
   #
   # Design rationale (addresses two anti-patterns from the naive approach):
   #
