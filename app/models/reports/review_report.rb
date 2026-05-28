@@ -3,16 +3,25 @@
 module Reports
   # Peer-review report composed of three streaming reducers.
   #
-  # ReviewersReducer and ScoresReducer share a single state keyed by reviewer_id
-  # so reviewer info and scores are co-located without a merge loop:
-  #   { reviewer_id => { id:, user_id:, name:, handle:,
-  #                      scores: { reviewee_id => { round => score_pct } } } }
+  # Three reducers build the report:
   #
-  # AvgRangesReducer runs independently:
-  #   { team_id => avg_score }
+  #   ReviewersReducer — streams ReviewResponseMap rows to populate reviewer
+  #     identity fields (id, user_id, name, handle) in shared state.
+  #
+  #   ScoresReducer — streams submitted Responses to compute score percentages
+  #     per reviewee per round, written into shared state under each reviewer.
+  #
+  #   Both write into a shared state keyed by reviewer_id so reviewer info and
+  #   scores are co-located without a merge loop:
+  #     { reviewer_id => { id:, user_id:, name:, handle:,
+  #                        scores: { reviewee_id => { round => score_pct } } } }
+  #
+  #   AvgRangesReducer — runs independently, streams AssignmentTeam rows to
+  #     compute the average review score per team:
+  #     { team_id => avg_score }
   #
   # Each reducer streams its source via find_each — no full result set is ever
-  # materialised in Ruby at once.
+  # materialized in Ruby at once.
   class ReviewReport
     def self.for_assignment(assignment)
       new(assignment)
@@ -22,6 +31,12 @@ module Reports
       @reportable = reportable
     end
 
+    # Runs all three reducers and returns the combined report:
+    #   {
+    #     reviewers: [{ id:, user_id:, name:, handle:,
+    #                   scores: { reviewee_id => { round => score_pct } } }, ...],
+    #     avg_and_ranges: { team_id => avg_score }
+    #   }
     def run
       shared_state = Hash.new do |state, reviewer_id|
         state[reviewer_id] = {
@@ -101,7 +116,7 @@ module Reports
     # Streams AssignmentTeam rows with review_mappings, responses, and scores
     # eagerly loaded to avoid N+1. Delegates score computation to
     # aggregate_review_grade (via ReviewAggregator concern) which picks the
-    # latest submitted response per round per map and normalises the score.
+    # latest submitted response per round per map and normalizes the score.
     # Output: { team_id => avg_score }
     # -----------------------------------------------------------------------
     class AvgRangesReducer < BaseReport
