@@ -196,7 +196,7 @@ Rails.application.routes.draw do
       end      
       resources :reports, only: [] do
         collection do
-          post :fetch_response_report
+          post :fetch_report
         end
       end
 

@@ -2,23 +2,25 @@
 
 class ReportsController < ApplicationController
   REPORT_CLASSES = {
-    'review_response_map'           => Reports::ReviewReport,
-    'feedback_response_map'         => Reports::FeedbackReport,
-    'teammate_review_response_map'  => Reports::TeammateReviewReport,
-    'bookmark_rating_response_map'  => Reports::BookmarkRatingReport,
-    'answer_tagging'                => Reports::AnswerTaggingReport,
-    'basic'                         => Reports::BasicReport
+    'basic' => Reports::BasicReport,
+    'review_response_map' => Reports::ReviewReport,
+    'feedback_response_map' => Reports::FeedbackReport,
+    'teammate_review_response_map' => Reports::TeammateReviewReport,
+    'bookmark_rating_response_map' => Reports::BookmarkRatingReport,
+    'answer_tagging' => Reports::AnswerTaggingReport
   }.freeze
 
-  # Only TAs, instructors, and admins may view reports.
+  before_action :set_assignment
+  before_action :authorize
+
+  # Only teaching staff (instructor or TA) of the specific assignment may view reports.
   def action_allowed?
-    current_user_has_ta_privileges?
+    current_user_teaching_staff_of_assignment?(@assignment.id)
   end
 
-  # POST /reports/fetch_response_report
+  # POST /reports/fetch_report
   # Returns the requested report as JSON.
-  def fetch_response_report
-    assignment_id = params[:assignment_id]
+  def fetch_report
     type = params[:type] || 'basic'
 
     report_class = REPORT_CLASSES[type]
@@ -28,12 +30,17 @@ class ReportsController < ApplicationController
       }, status: :unprocessable_entity
     end
 
-    assignment = Assignment.find(assignment_id)
-    data = report_class.for_assignment(assignment).run
-    render json: { type: type, assignment_id: assignment_id.to_i }.merge(data)
-  rescue ActiveRecord::RecordNotFound
-    render json: { error: 'Assignment not found' }, status: :not_found
+    data = report_class.for_assignment(@assignment).run
+    render json: { type: type, assignment_id: @assignment.id }.merge(data)
   rescue StandardError => e
     render json: { error: e.message }, status: :internal_server_error
+  end
+
+  private
+
+  def set_assignment
+    @assignment = Assignment.find(params[:assignment_id])
+  rescue ActiveRecord::RecordNotFound
+    render json: { error: 'Assignment not found' }, status: :not_found
   end
 end
