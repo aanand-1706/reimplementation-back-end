@@ -1,23 +1,24 @@
 # frozen_string_literal: true
 
 module Reports
-  # Teammate-review report: for each reviewer, shows how many teammates they
+  # Teammate-review report: for each team member, shows how many teammates they
   # have in total, how many they reviewed, and the individual reviewee details.
   #
   # Two reducers write into a single shared state keyed by user_id:
   #
   #   TeammateReviewReducer — streams TeammateReviewResponseMap rows to populate
   #     reviewer identity fields and build the reviewees list.
-  #     Writes to state: { user_id => { ..., reviewed_count:, reviewees: [] } }
+  #     Writes to state: { user_id => { reviewer_id:, user_id:, name:,
+  #                                     reviewed_count:, reviewees: [] } }
   #
-  #   TeamSizeReducer — streams TeamsUser rows for the assignment to set
-  #     teammate_count, user_id, and name for all team members (including
-  #     those who have not done any review).
+  #   TeamSizeReducer — streams AssignmentTeam rows with teams_users eagerly
+  #     loaded. For each team, populates user_id and name for all members and
+  #     adds (team_size - 1) to each member's teammate_count (excluding themselves).
   #     Writes to state: { user_id => { ..., user_id:, name:, teammate_count: } }
   #
   # Shared state shape (keyed by user_id):
   #   { user_id => { reviewer_id:,                         ← filled by TeammateReviewReducer (nil if no review)
-  #                  user_id:, name:,                      ← filled by both (TeamSizeReducer & TeammateReviewReducer)
+  #                  user_id:, name:,                      ← filled by both reducers
   #                  teammate_count:,                       ← filled by TeamSizeReducer
   #                  reviewed_count:,                       ← filled by TeammateReviewReducer
   #                  reviewees: [{ reviewee_id:, name: }] } ← filled by TeammateReviewReducer }}
@@ -69,11 +70,9 @@ module Reports
 
         user_id = reviewer.user_id
 
-        unless state.key?(user_id)
-          state[user_id][:reviewer_id] = reviewer.id
-          state[user_id][:user_id]     = reviewer.user_id
-          state[user_id][:name]        = reviewer.user&.name
-        end
+        state[user_id][:reviewer_id] ||= reviewer.id
+        state[user_id][:user_id]     ||= reviewer.user_id
+        state[user_id][:name]        ||= reviewer.user&.name
 
         reviewee = map.reviewee
         return unless reviewee
@@ -87,27 +86,28 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Reducer 2 — per-team-member teammate count.
-    # Streams TeamsUser rows for the assignment. Increments teammate_count
-    # for every team member, including those who have not done any review.
-    # teammate_count counts all TeamsUser rows for the user's team,
-    # including themselves.
+    # Reducer 2 — per-team-member identity and teammate count.
+    # Streams AssignmentTeam rows with teams_users eagerly loaded. For each
+    # team, distributes (team_size - 1) to every member's teammate_count,
+    # excluding themselves. Sums correctly if a user is in more than one team.
     # -----------------------------------------------------------------------
     class TeamSizeReducer < BaseReport
       def source
-        TeamsUser
-          .joins(:team)
-          .where(teams: { parent_id: @reportable.id, type: 'AssignmentTeam' })
-          .includes(:user)
+        AssignmentTeam
+          .where(parent_id: @reportable.id)
+          .includes(teams_users: :user)
       end
 
       def initial_state = {}
 
-      def accumulate(state, teams_user)
-        user_id = teams_user.user_id
-        state[user_id][:user_id] ||= user_id
-        state[user_id][:name]    ||= teams_user.user&.name
-        state[user_id][:teammate_count] += 1
+      def accumulate(state, team)
+        team_size = team.teams_users.size
+        team.teams_users.each do |teams_user|
+          user_id = teams_user.user_id
+          state[user_id][:user_id] ||= user_id
+          state[user_id][:name]    ||= teams_user.user&.name
+          state[user_id][:teammate_count] += team_size - 1
+        end
       end
     end
   end
