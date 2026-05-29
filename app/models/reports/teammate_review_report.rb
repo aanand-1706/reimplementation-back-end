@@ -11,14 +11,16 @@ module Reports
   #     Writes to state: { user_id => { ..., reviewed_count:, reviewees: [] } }
   #
   #   TeamSizeReducer — streams TeamsUser rows for the assignment to set
-  #     teammate_count for each reviewer already present in shared state.
-  #     Writes to state: { user_id => { ..., teammate_count: } }
+  #     teammate_count, user_id, and name for all team members (including
+  #     those who have not done any review).
+  #     Writes to state: { user_id => { ..., user_id:, name:, teammate_count: } }
   #
   # Shared state shape (keyed by user_id):
-  #   { user_id => { reviewer_id:, user_id:, name:,        ← filled by TeammateReviewReducer
+  #   { user_id => { reviewer_id:,                         ← filled by TeammateReviewReducer (nil if no review)
+  #                  user_id:, name:,                      ← filled by both (TeamSizeReducer & TeammateReviewReducer)
   #                  teammate_count:,                       ← filled by TeamSizeReducer
   #                  reviewed_count:,                       ← filled by TeammateReviewReducer
-  #                  reviewees: [{ reviewee_id:, name: }] } }
+  #                  reviewees: [{ reviewee_id:, name: }] } ← filled by TeammateReviewReducer }}
   class TeammateReviewReport
     def self.for_assignment(assignment)
       new(assignment)
@@ -55,7 +57,7 @@ module Reports
     class TeammateReviewReducer < BaseReport
       def source
         TeammateReviewResponseMap
-          .where(reviewed_object_id: @reportable.id)
+          .for_assignment(@reportable.id)
           .includes(reviewer: :user, reviewee: :user)
       end
 
@@ -85,9 +87,9 @@ module Reports
     end
 
     # -----------------------------------------------------------------------
-    # Reducer 2 — per-reviewer teammate count.
-    # Streams TeamsUser rows for the assignment. Only updates state for
-    # users who are already reviewers (present in shared state).
+    # Reducer 2 — per-team-member teammate count.
+    # Streams TeamsUser rows for the assignment. Increments teammate_count
+    # for every team member, including those who have not done any review.
     # teammate_count counts all TeamsUser rows for the user's team,
     # including themselves.
     # -----------------------------------------------------------------------
@@ -103,7 +105,9 @@ module Reports
 
       def accumulate(state, teams_user)
         user_id = teams_user.user_id
-        state[user_id][:teammate_count] += 1 if state.key?(user_id)
+        state[user_id][:user_id] ||= user_id
+        state[user_id][:name]    ||= teams_user.user&.name
+        state[user_id][:teammate_count] += 1
       end
     end
   end
