@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Reports
-  # Template for a streaming reduction-based report.
+  # Base class for streaming reducers.
   #
   # Design rationale (addresses two anti-patterns from the naive approach):
   #
@@ -11,7 +11,7 @@ module Reports
   #   find_each so memory usage scales with the number of *groups*, not rows.
   #
   #   Anti-pattern 2 — "default metrics in base": encoding avg_score or any
-  #   domain metric in the base class ties every report to one shape of math.
+  #   domain metric in the base class ties every reducer to one shape of math.
   #   This class contains *only* the reducer scaffold; each subclass owns its
   #   accumulate/finalize logic entirely.
   #
@@ -24,7 +24,7 @@ module Reports
   # Subclasses may override (private):
   #   finalize(state) → transforms finished state into the output hash
   #                      (default: returns state unchanged)
-  class BaseReport
+  class BaseReducer
     # Factory method for assignment-scoped reports.
     def self.for_assignment(assignment)
       new(assignment)
@@ -49,7 +49,7 @@ module Reports
     # initial_state is ignored — the coordinator owns state initialization.
     # finalize is always called, even when shared_state is provided.
     #
-    # Benefits of this structure over writing report code directly:
+    # Benefits of this structure over writing reducer code directly:
     #   1. Memory safety — find_each streams in batches of 500 rather than
     #      loading the entire relation into Ruby. Every report gets this for free.
     #   2. New reports are just data — subclasses define source/initial_state/accumulate/finalize;
