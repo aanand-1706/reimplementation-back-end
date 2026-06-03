@@ -55,7 +55,7 @@ module Reports
     # Streams TeammateReviewResponseMap rows; on first occurrence per reviewer
     # populates identity fields, then appends each reviewee to the list.
     # -----------------------------------------------------------------------
-    class TeammateReviewReducer < BaseReport
+    class TeammateReviewReducer < BaseReducer
       def source
         TeammateReviewResponseMap
           .for_assignment(@reportable.id)
@@ -91,7 +91,7 @@ module Reports
     # team, distributes (team_size - 1) to every member's teammate_count,
     # excluding themselves. Sums correctly if a user is in more than one team.
     # -----------------------------------------------------------------------
-    class TeamSizeReducer < BaseReport
+    class TeamSizeReducer < BaseReducer
       def source
         AssignmentTeam
           .where(parent_id: @reportable.id)
