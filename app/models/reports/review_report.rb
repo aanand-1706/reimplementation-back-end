@@ -62,7 +62,7 @@ module Reports
     # Streams ReviewResponseMap rows; writes reviewer details into shared state
     # on first occurrence per reviewer.
     # -----------------------------------------------------------------------
-    class ReviewersReducer < BaseReport
+    class ReviewersReducer < BaseReducer
       def source
         ReviewResponseMap.for_assignment(@reportable.id).includes(reviewer: :user)
       end
@@ -90,7 +90,7 @@ module Reports
     # Writes score_pct into shared state under
     # state[reviewer_id][:scores][reviewee_id][round].
     # -----------------------------------------------------------------------
-    class ScoresReducer < BaseReport
+    class ScoresReducer < BaseReducer
       def source
         Response
           .submitted_review_responses_for(@reportable.id)
@@ -119,7 +119,7 @@ module Reports
     # latest submitted response per round per map and normalizes the score.
     # Output: { team_id => avg_score }
     # -----------------------------------------------------------------------
-    class AvgRangesReducer < BaseReport
+    class AvgRangesReducer < BaseReducer
       def source
         AssignmentTeam
           .where(parent_id: @reportable.id)
