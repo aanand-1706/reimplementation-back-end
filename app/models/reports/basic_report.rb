@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
-# Basic report: minimal reportable metadata.
-# Used as a fallback when no specific report type is requested.
-# No streaming needed — all data comes from the already-loaded reportable.
-class BasicReport
+module Reports
+  # Basic report: minimal reportable metadata.
+  # Used as a fallback when no specific report type is requested.
+  # No streaming needed — all data comes from the already-loaded reportable.
+  class BasicReport
     # Factory method for assignment-scoped reports.
     def self.for_assignment(assignment)
       new(assignment)
@@ -29,4 +30,5 @@ class BasicReport
       }
     }
   end
+end
 end

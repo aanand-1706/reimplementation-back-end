@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# Base class for streaming reducers.
+module Reports
+  # Base class for streaming reducers.
 #
 # Design rationale (addresses two anti-patterns from the naive approach):
 #
@@ -73,4 +74,5 @@ class BaseReducer
   end
 
   def finalize(state) = state
+  end
 end

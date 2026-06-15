@@ -2,8 +2,8 @@
 
 class ReportsController < ApplicationController
   REPORT_CLASSES = {
-    'basic' => BasicReport,
-    'review_response_map' => ReviewReport
+    'basic' => Reports::BasicReport,
+    'review_response_map' => Reports::ReviewReport
   }.freeze
 
   before_action :set_assignment
