@@ -6,6 +6,8 @@ class ResponseMap < ApplicationRecord
   belongs_to :reviewee, class_name: 'Participant', foreign_key: 'reviewee_id', inverse_of: false
   belongs_to :assignment, class_name: 'Assignment', foreign_key: 'reviewed_object_id', inverse_of: false
 
+  scope :for_assignment, ->(assignment_id) { where(reviewed_object_id: assignment_id) }
+
   alias map_id id
 
   # Shared helper for Response#rubric_label; looks up the declarative constant so each map advertises its UI label
