@@ -48,14 +48,14 @@ module Reports
   #         ]
   #       }
   #     ],
-  #     scores: {
+  #     reviewer_scores: {
   #       reviewer_id => {
   #         reviewee_id => {
   #           round => Float   # score as a percentage (0–100)
   #         }
   #       }
   #     },
-  #     avg_and_ranges: {
+  #     team_averages: {
   #       team_id => Float     # average review score across all reviewers, as a percentage (0–100)
   #     }
   #   }
@@ -99,9 +99,9 @@ module Reports
                .includes(reviewer: :user, reviewee: :user, responses: { scores: :item })
 
       {
-        reviews:        maps.as_json(MAP_JSON_OPTIONS),
-        scores:         ScoresReducer.new(@reportable).run,
-        avg_and_ranges: AvgRangesReducer.new(@reportable).run
+        reviews:          maps.as_json(MAP_JSON_OPTIONS),
+        reviewer_scores:  ScoresReducer.new(@reportable).run,
+        team_averages:    AvgRangesReducer.new(@reportable).run
       }
     end
 
