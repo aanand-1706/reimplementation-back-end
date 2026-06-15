@@ -9,9 +9,10 @@ module Reports
   #   Review rows — loads all ReviewResponseMaps for the assignment with reviewer,
   #     reviewee, responses, and scores eagerly loaded, then serializes via as_json.
   #
-  #   ScoresReducer — streams submitted Response rows (one per reviewer × reviewee ×
-  #     round) and computes score percentage from the response's answers relative to
-  #     the questionnaire's max score.
+  #   ScoresReducer — streams ReviewResponseMap rows for the assignment. For each
+  #     map, picks the latest submitted response per round (via
+  #     latest_submitted_response_by_round) and computes a score percentage from
+  #     the response's answers relative to the questionnaire's max score.
   #     Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
   #
   #   AvgRangesReducer — streams AssignmentTeam rows. For each team, the average
@@ -79,15 +80,16 @@ module Reports
 
     # -----------------------------------------------------------------------
     # Reducer 1 — per-reviewer × reviewee × round score percentages.
-    # Streams submitted Responses with scores and questionnaires eagerly loaded
-    # to avoid N+1 inside calculate_total_score and maximum_score.
+    # Streams ReviewResponseMap rows with responses and scores eagerly loaded.
+    # For each map, delegates to latest_submitted_response_by_round to pick
+    # the most recent submitted response per round without N+1 queries.
     # Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
     # -----------------------------------------------------------------------
     class ScoresReducer < BaseReducer
       def source
-        Response
-          .submitted_review_responses_for(@reportable.id)
-          .includes(:response_map, scores: { item: :questionnaire })
+        ReviewResponseMap
+          .for_assignment(@reportable.id)
+          .includes(responses: { scores: :item })
       end
 
       def initial_state
@@ -96,15 +98,13 @@ module Reports
         end
       end
 
-      def accumulate(state, response)
-        return if response.maximum_score.zero?
+      def accumulate(state, map)
+        map.latest_submitted_response_by_round.each do |round, response|
+          next if response.maximum_score.zero?
 
-        reviewer_id = response.response_map.reviewer_id
-        reviewee_id = response.response_map.reviewee_id
-        round       = response.round || 1
-        score_pct   = (response.aggregate_questionnaire_score.to_f / response.maximum_score * 100).round(2)
-
-        state[reviewer_id][reviewee_id][round] = score_pct
+          score_pct = (response.aggregate_questionnaire_score.to_f / response.maximum_score * 100).round(2)
+          state[map.reviewer_id][map.reviewee_id][round] = score_pct
+        end
       end
     end
 

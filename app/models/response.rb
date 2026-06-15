@@ -6,19 +6,7 @@ class Response < ApplicationRecord
 
   belongs_to :response_map, class_name: 'ResponseMap', foreign_key: 'map_id', inverse_of: false
 
-  scope :submitted_review_responses_for, ->(assignment_id) {
-    # Subquery picks the latest submitted response per (response_map, round)
-    # so that only the most recent submission per reviewer-reviewee pair per round is counted.
-    latest_ids = joins(:response_map)
-      .where(
-        response_maps: { reviewed_object_id: assignment_id, type: 'ReviewResponseMap' },
-        is_submitted: true
-      )
-      .group('response_maps.id, responses.round')
-      .select('MAX(responses.id)')
 
-    where(id: latest_ids)
-  }
   has_many :scores, class_name: 'Answer', foreign_key: 'response_id', dependent: :destroy, inverse_of: false
   accepts_nested_attributes_for :scores
 
