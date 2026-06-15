@@ -2,12 +2,8 @@
 
 class ReportsController < ApplicationController
   REPORT_CLASSES = {
-    'basic' => Reports::BasicReport,
-    'review_response_map' => Reports::ReviewReport,
-    'feedback_response_map' => Reports::FeedbackReport,
-    'teammate_review_response_map' => Reports::TeammateReviewReport,
-    'bookmark_rating_response_map' => Reports::BookmarkRatingReport,
-    'answer_tagging' => Reports::AnswerTaggingReport
+    'basic' => BasicReport,
+    'review_response_map' => ReviewReport
   }.freeze
 
   before_action :set_assignment

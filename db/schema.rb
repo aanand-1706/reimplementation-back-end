@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_03_13_064334) do
+ActiveRecord::Schema[8.0].define(version: 2026_05_18_000003) do
   create_table "account_requests", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.string "username"
     t.string "full_name"
@@ -23,6 +23,19 @@ ActiveRecord::Schema[8.0].define(version: 2026_03_13_064334) do
     t.bigint "institution_id", null: false
     t.index ["institution_id"], name: "index_account_requests_on_institution_id"
     t.index ["role_id"], name: "index_account_requests_on_role_id"
+  end
+
+  create_table "answer_tags", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "answer_id", null: false
+    t.bigint "tag_prompt_deployment_id", null: false
+    t.bigint "user_id", null: false
+    t.string "value", null: false
+    t.decimal "confidence_level", precision: 10, scale: 5
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["answer_id"], name: "index_answer_tags_on_answer_id"
+    t.index ["tag_prompt_deployment_id"], name: "index_answer_tags_on_tag_prompt_deployment_id"
+    t.index ["user_id"], name: "index_answer_tags_on_user_id"
   end
 
   create_table "answers", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
@@ -388,6 +401,27 @@ ActiveRecord::Schema[8.0].define(version: 2026_03_13_064334) do
     t.index ["user_id"], name: "index_ta_mappings_on_user_id"
   end
 
+  create_table "tag_prompt_deployments", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "tag_prompt_id", null: false
+    t.bigint "assignment_id", null: false
+    t.bigint "questionnaire_id", null: false
+    t.string "question_type"
+    t.integer "answer_length_threshold"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["assignment_id"], name: "index_tag_prompt_deployments_on_assignment_id"
+    t.index ["questionnaire_id"], name: "index_tag_prompt_deployments_on_questionnaire_id"
+    t.index ["tag_prompt_id"], name: "index_tag_prompt_deployments_on_tag_prompt_id"
+  end
+
+  create_table "tag_prompts", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.string "prompt", null: false
+    t.string "desc", null: false
+    t.string "control_type", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+  end
+
   create_table "teams", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
@@ -450,15 +484,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_03_13_064334) do
 
   add_foreign_key "account_requests", "institutions"
   add_foreign_key "account_requests", "roles"
+  add_foreign_key "answer_tags", "answers"
+  add_foreign_key "answer_tags", "tag_prompt_deployments"
+  add_foreign_key "answer_tags", "users"
   add_foreign_key "assignments", "courses"
   add_foreign_key "assignments", "users", column: "instructor_id"
   add_foreign_key "assignments_duties", "assignments"
   add_foreign_key "assignments_duties", "duties"
   add_foreign_key "courses", "institutions"
   add_foreign_key "courses", "users", column: "instructor_id"
+  add_foreign_key "duties", "users", column: "instructor_id"
   add_foreign_key "invitations", "participants", column: "from_id"
   add_foreign_key "invitations", "participants", column: "to_id"
-  add_foreign_key "duties", "users", column: "instructor_id"
   add_foreign_key "items", "questionnaires"
   add_foreign_key "participants", "duties"
   add_foreign_key "participants", "join_team_requests"
@@ -471,6 +508,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_03_13_064334) do
   add_foreign_key "signed_up_teams", "teams"
   add_foreign_key "ta_mappings", "courses"
   add_foreign_key "ta_mappings", "users"
+  add_foreign_key "tag_prompt_deployments", "assignments"
+  add_foreign_key "tag_prompt_deployments", "questionnaires"
+  add_foreign_key "tag_prompt_deployments", "tag_prompts"
   add_foreign_key "teams_participants", "participants"
   add_foreign_key "teams_participants", "teams"
   add_foreign_key "teams_users", "teams"

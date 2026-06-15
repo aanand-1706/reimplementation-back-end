@@ -138,3 +138,98 @@ begin
 rescue ActiveRecord::RecordInvalid => e
   puts e, 'The db has already been seeded'
 end
+
+# ---------------------------------------------------------------------------
+# Review report seed data
+# Creates the questionnaire, questions, response maps, responses, and answers
+# needed to exercise the ReviewReport for the first assignment.
+# ---------------------------------------------------------------------------
+begin
+  assignment   = Assignment.first
+  instructor   = User.find_by(role_id: 3)
+
+  puts "creating review questionnaire"
+  questionnaire = Questionnaire.create!(
+    name: 'Peer Review Rubric',
+    instructor_id: instructor.id,
+    private: false,
+    min_question_score: 0,
+    max_question_score: 5,
+    questionnaire_type: 'ReviewQuestionnaire'
+  )
+
+  puts "creating questionnaire items"
+  items = [
+    'How well did the team communicate?',
+    'How thoroughly were the deliverables completed?',
+    'Rate the overall quality of the work.'
+  ].each_with_index.map do |txt, i|
+    Item.create!(
+      questionnaire_id: questionnaire.id,
+      txt: txt,
+      weight: 1,
+      seq: i + 1,
+      question_type: 'Criterion',
+      break_before: true
+    )
+  end
+
+  puts "linking questionnaire to assignment"
+  AssignmentQuestionnaire.find_or_create_by!(
+    assignment_id: assignment.id,
+    questionnaire_id: questionnaire.id,
+    used_in_round: 1
+  ) { |aq| aq.questionnaire_weight = 100; aq.notification_limit = 15 }
+
+  AssignmentQuestionnaire.find_or_create_by!(
+    assignment_id: assignment.id,
+    questionnaire_id: questionnaire.id,
+    used_in_round: 2
+  ) { |aq| aq.questionnaire_weight = 100; aq.notification_limit = 15 }
+
+  teams        = AssignmentTeam.where(parent_id: assignment.id).to_a
+  participants = AssignmentParticipant.where(parent_id: assignment.id).to_a
+
+  puts "creating review response maps, responses, and answers"
+  participants.each_with_index do |reviewer, idx|
+    reviewee_team = teams.reject { |t| t.id == reviewer.team_id }.first
+    next if reviewee_team.nil?
+
+    # One map per reviewer-reviewee pair — idempotent
+    map = ReviewResponseMap.find_or_create_by!(
+      reviewed_object_id: assignment.id,
+      reviewer_id: reviewer.id,
+      reviewee_id: reviewee_team.id
+    )
+
+    # Round 1 — all reviewers
+    r1 = Response.find_or_create_by!(map_id: map.id, round: 1) do |r|
+      r.is_submitted = true
+      r.additional_comment = Faker::Lorem.sentence
+    end
+    items.each do |item|
+      Answer.find_or_create_by!(response_id: r1.id, item_id: item.id) do |a|
+        a.answer   = rand(3..5)
+        a.comments = Faker::Lorem.sentence
+      end
+    end
+
+    # Round 2 — first reviewer only, so scores vs avg_and_ranges differ visibly
+    next unless idx.zero?
+
+    r2 = Response.find_or_create_by!(map_id: map.id, round: 2) do |r|
+      r.is_submitted = true
+      r.additional_comment = Faker::Lorem.sentence
+    end
+    items.each do |item|
+      Answer.find_or_create_by!(response_id: r2.id, item_id: item.id) do |a|
+        a.answer   = rand(1..3)
+        a.comments = Faker::Lorem.sentence
+      end
+    end
+  end
+
+  puts "Review report seed data created successfully."
+rescue ActiveRecord::RecordInvalid => e
+  puts e, 'Review report seed data may already exist.'
+end

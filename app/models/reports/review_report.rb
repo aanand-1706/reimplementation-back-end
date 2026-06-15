@@ -1,36 +1,35 @@
 # frozen_string_literal: true
 
-module Reports
-  # Peer-review report: returns raw review rows (reviewer, reviewee, responses,
-  # scores) plus computed score percentages per reviewer and per-team averages.
-  #
-  # Three data sources:
-  #
-  #   Review rows — a single AR query on ReviewResponseMap with all associations
-  #     eagerly loaded, serialized via as_json. Each row contains reviewer,
-  #     reviewee, and full response/score content.
-  #
-  #   ScoresReducer — streams submitted Responses to compute score percentages
-  #     per reviewer × reviewee × round.
-  #     Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
-  #
-  #   AvgRangesReducer — streams AssignmentTeam rows to compute the average
-  #     review score per team.
-  #     Output: { team_id => avg_score }
-  #
-  # Output:
-  #   {
-  #     reviews: [ { id:,
-  #                  reviewer: { id:, user: { id:, name: } },
-  #                  reviewee: { id:, user: { id:, name: } },
-  #                  responses: [ { id:, round:, is_submitted:, additional_comment:,
-  #                                 scores: [ { id:, answer:, comments:,
-  #                                             item: { id:, txt:, weight: } } ] } ]
-  #                }, ... ],
-  #     scores:         { reviewer_id => { reviewee_id => { round => score_pct } } },
-  #     avg_and_ranges: { team_id => avg_score }
-  #   }
-  class ReviewReport
+# Peer-review report: returns raw review rows (reviewer, reviewee, responses,
+# scores) plus computed score percentages per reviewer and per-team averages.
+#
+# Three data sources:
+#
+#   Review rows — a single AR query on ReviewResponseMap with all associations
+#     eagerly loaded, serialized via as_json. Each row contains reviewer,
+#     reviewee, and full response/score content.
+#
+#   ScoresReducer — streams submitted Responses to compute score percentages
+#     per reviewer × reviewee × round.
+#     Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
+#
+#   AvgRangesReducer — streams AssignmentTeam rows to compute the average
+#     review score per team.
+#     Output: { team_id => avg_score }
+#
+# Output:
+#   {
+#     reviews: [ { id:,
+#                  reviewer: { id:, user: { id:, name: } },
+#                  reviewee: { id:, user: { id:, name: } },
+#                  responses: [ { id:, round:, is_submitted:, additional_comment:,
+#                                 scores: [ { id:, answer:, comments:,
+#                                             item: { id:, txt:, weight: } } ] } ]
+#                }, ... ],
+#     scores:         { reviewer_id => { reviewee_id => { round => score_pct } } },
+#     avg_and_ranges: { team_id => avg_score }
+#   }
+class ReviewReport
     # Whitelist for as_json — includes only fields the frontend needs,
     # excluding internal columns (raw FKs, timestamps, STI type, etc.).
     MAP_JSON_OPTIONS = {
@@ -82,7 +81,7 @@ module Reports
     # to avoid N+1 inside calculate_total_score and maximum_score.
     # Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
     # -----------------------------------------------------------------------
-    class ScoresReducer < BaseReducer
+  class ScoresReducer < BaseReducer
       def source
         Response
           .submitted_review_responses_for(@reportable.id)
@@ -101,11 +100,11 @@ module Reports
         reviewer_id = response.response_map.reviewer_id
         reviewee_id = response.response_map.reviewee_id
         round       = response.round || 1
-        score_pct   = (response.calculate_total_score.to_f / response.maximum_score * 100).round(2)
+        score_pct   = (response.aggregate_questionnaire_score.to_f / response.maximum_score * 100).round(2)
 
         state[reviewer_id][reviewee_id][round] = score_pct
       end
-    end
+  end
 
     # -----------------------------------------------------------------------
     # Reducer 2 — per-team average review score.
@@ -115,7 +114,7 @@ module Reports
     # round per map and normalizes the score.
     # Output: { team_id => avg_score }
     # -----------------------------------------------------------------------
-    class AvgRangesReducer < BaseReducer
+  class AvgRangesReducer < BaseReducer
       def source
         AssignmentTeam
           .where(parent_id: @reportable.id)
@@ -127,6 +126,5 @@ module Reports
       def accumulate(state, team)
         state[team.id] = team.aggregate_review_grade
       end
-    end
   end
 end
