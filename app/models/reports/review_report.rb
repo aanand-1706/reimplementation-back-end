@@ -6,16 +6,17 @@ module Reports
   #
   # Three data sources:
   #
-  #   Review rows — a single AR query on ReviewResponseMap with all associations
-  #     eagerly loaded, serialized via as_json. Each row contains reviewer,
-  #     reviewee, and full response/score content.
+  #   Review rows — loads all ReviewResponseMaps for the assignment with reviewer,
+  #     reviewee, responses, and scores eagerly loaded, then serializes via as_json.
   #
-  #   ScoresReducer — streams submitted Responses to compute score percentages
-  #     per reviewer × reviewee × round.
+  #   ScoresReducer — streams submitted Response rows (one per reviewer × reviewee ×
+  #     round) and computes score percentage from the response's answers relative to
+  #     the questionnaire's max score.
   #     Output: { reviewer_id => { reviewee_id => { round => score_pct } } }
   #
-  #   AvgRangesReducer — streams AssignmentTeam rows to compute the average
-  #     review score per team.
+  #   AvgRangesReducer — streams AssignmentTeam rows. For each team, the average
+  #     review score is computed from its eagerly-loaded review_mappings and their
+  #     nested responses and scores (via aggregate_review_grade).
   #     Output: { team_id => avg_score }
   #
   # Output:
