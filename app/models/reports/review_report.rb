@@ -22,15 +22,42 @@ module Reports
   #
   # Output:
   #   {
-  #     reviews: [ { id:,
-  #                  reviewer: { id:, user: { id:, name: } },
-  #                  reviewee: { id:, user: { id:, name: } },
-  #                  responses: [ { id:, round:, is_submitted:, additional_comment:,
-  #                                 scores: [ { id:, answer:, comments:,
-  #                                             item: { id:, txt:, weight: } } ] } ]
-  #                }, ... ],
-  #     scores:         { reviewer_id => { reviewee_id => { round => score_pct } } },
-  #     avg_and_ranges: { team_id => avg_score }
+  #     reviews: [
+  #       {
+  #         id: Integer,                         # ReviewResponseMap id
+  #         reviewer: {
+  #           id: Integer,                       # AssignmentParticipant id
+  #           user: { id: Integer, name: String }
+  #         },
+  #         reviewee: { id: Integer },           # AssignmentTeam id
+  #         responses: [
+  #           {
+  #             id: Integer,
+  #             round: Integer,                  # review round number (1-based)
+  #             is_submitted: Boolean,
+  #             additional_comment: String,
+  #             scores: [
+  #               {
+  #                 id: Integer,
+  #                 answer: Integer,             # raw score value
+  #                 comments: String,
+  #                 item: { id: Integer, txt: String, weight: Integer }
+  #               }
+  #             ]
+  #           }
+  #         ]
+  #       }
+  #     ],
+  #     scores: {
+  #       reviewer_id => {
+  #         reviewee_id => {
+  #           round => Float   # score as a percentage (0–100)
+  #         }
+  #       }
+  #     },
+  #     avg_and_ranges: {
+  #       team_id => Float     # average review score across all reviewers, as a percentage (0–100)
+  #     }
   #   }
   class ReviewReport
     # Whitelist for as_json — includes only fields the frontend needs,
