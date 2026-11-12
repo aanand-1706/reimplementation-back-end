@@ -149,8 +149,8 @@ RSpec.describe GradesController, type: :controller do
       participant_json = json["participant"]
       expect(participant_json["id"]).to eq(fake_participant.id)
       expect(participant_json["user_id"]).to eq(fake_participant.user_id)
-      expect(participant_json["user_name"]).to eq(fake_participant.user.username)
-      expect(participant_json["full_name"]).to eq(fake_participant.user.name)
+      expect(participant_json["username"]).to eq(fake_participant.user.username)
+      expect(participant_json["name"]).to eq(fake_participant.user.name)
       expect(participant_json["handle"]).to eq(fake_participant.handle)
     end
 

@@ -8,7 +8,7 @@ class AuthenticationController < ApplicationController
   def login
     user = User.find_by(username: params[:user_name]) || User.find_by(email: params[:user_name])
     if user&.authenticate(params[:password])
-      payload = { id: user.id, name: user.username, full_name: user.name, role: user.role.name,
+      payload = { id: user.id, username: user.username, name: user.name, role: user.role.name,
                   institution_id: user.institution.id }
       token = JsonWebToken.encode(payload, 24.hours.from_now)
       render json: { token: }, status: :ok

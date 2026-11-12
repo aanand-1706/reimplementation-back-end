@@ -49,8 +49,8 @@ RSpec.describe AuthenticationController, type: :request do
           decoded_token = JsonWebToken.decode(token)
 
           expect(decoded_token['id']).to eq(user.id)
-          expect(decoded_token['name']).to eq(user.username)
-          expect(decoded_token['full_name']).to eq(user.name)
+          expect(decoded_token['username']).to eq(user.username)
+          expect(decoded_token['name']).to eq(user.name)
           expect(decoded_token['role']).to eq(user.role.name)
           expect(decoded_token['institution_id']).to eq(user.institution.id)
         end

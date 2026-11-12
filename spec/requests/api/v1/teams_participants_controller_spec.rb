@@ -287,14 +287,14 @@ RSpec.describe 'teams_participants', type: :request do
       parameter name: 'id', in: :path, type: :integer, description: "Team ID"
       parameter name: :payload, in: :body, schema: {
         type: :object,
-        properties: { name: { type: :string } },
-        required: ['name']
+        properties: { username: { type: :string } },
+        required: ['username']
       }
 
       # -- SUCCESS: Add to AssignmentTeam when space available and participant exists --
       response(200, 'added to assignment') do
         let(:id)      { team_with_assignment.id }
-        let(:payload) { { name: new_user.username } }
+        let(:payload) { { username: new_user.username } }
 
         before do
           allow_any_instance_of(Team).to receive(:full?).and_return(false)
@@ -309,7 +309,7 @@ RSpec.describe 'teams_participants', type: :request do
       # -- SUCCESS: Add to CourseTeam when space available and participant exists --
       response(200, 'added to course') do
         let(:id)      { team_with_course.id }
-        let(:payload) { { name: new_user.username } }
+        let(:payload) { { username: new_user.username } }
 
         before do
           allow_any_instance_of(Team).to receive(:full?).and_return(false)
@@ -325,7 +325,7 @@ RSpec.describe 'teams_participants', type: :request do
       response(404, 'participant not found') do
         let(:id)                                     { team_with_assignment.id }
         let!(:user_without_participant)              { User.create!(name: "User Without Participant", username: "no_part", email: "no@example.com", password_digest: "pw", role_id: @roles[:student].id, institution_id: institution.id) }
-        let(:payload)                                { { name: user_without_participant.username } }
+        let(:payload)                                { { username: user_without_participant.username } }
 
         run_test! do
           expect(response.body).to include("Couldn't find Participant")

@@ -117,8 +117,8 @@ class GradesController < ApplicationController
         participant: {
           id: participant.id,
           user_id: participant.user_id,
-          user_name: participant.user.username,
-          full_name: participant.user.name,
+          username: participant.user.username,
+          name: participant.user.name,
           handle: participant.handle
         },
         assignment: {
