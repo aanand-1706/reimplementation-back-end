@@ -50,11 +50,11 @@ module Reports
       include: {
         reviewer: {
           only: [:id],
-          include: { user: { only: %i[id name] } }
+          include: { user: { only: %i[id username] } }
         },
         reviewee: {
           only: [:id],
-          include: { user: { only: %i[id name] } }
+          include: { user: { only: %i[id username] } }
         },
         responses: {
           only: %i[id round additional_comment is_submitted],

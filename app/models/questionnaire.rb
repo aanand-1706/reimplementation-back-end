@@ -60,7 +60,7 @@ class Questionnaire < ApplicationRecord # rubocop:disable Metrics/ClassLength
                                    questionnaire_type
                                    instructor_id],
                           include: {
-                            instructor: { only: %i[name email fullname role] },
+                            instructor: { only: %i[username name email role] },
                             items: {}
                           }
                         })).tap do |hash|
