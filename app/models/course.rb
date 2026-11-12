@@ -46,7 +46,7 @@ class Course < ApplicationRecord
       ta.update(role_id: Role::STUDENT)
     end
     ta_mapping.destroy
-    { success: true, ta_name: ta.name }
+    { success: true, ta_name: ta.username }
   end
 
   # Assignments that have at least one participant.
